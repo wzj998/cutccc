@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>cutccc · 本地剪辑工作台</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="cutccc 首页"
+        ><span class="brand-mark">c<span>›</span></span
+        >cutccc<span class="brand-dot">.</span></a
+      >
+      <span class="workspace-label"><i class="status-dot"></i>本地工作台</span>
+      <div class="project-heading">
+        <input
+          id="projectTitle"
+          aria-label="项目名称"
+          placeholder="未命名项目"
+          maxlength="120"
+          disabled
+        /><span id="saveState">准备开始</span>
+      </div>
+      <button
+        id="reloadBtn"
+        class="icon-button"
+        title="重新载入项目"
+        aria-label="重新载入项目"
+        disabled
+      >
+        ↻
+      </button>
+      <a class="quiet-link" href="/api-docs" target="_blank" rel="noopener"
+        >API / MCP ↗</a
+      >
+      <button id="saveBtn" class="button secondary" disabled>
+        保存项目 <kbd>⌘ / Ctrl S</kbd>
+      </button>
+      <button id="exportBtn" class="button primary" disabled>
+        <span>↗</span> 导出视频
+      </button>
+    </header>
+    <main class="workspace">
+      <aside class="library">
+        <div class="panel-heading">
+          <h2>素材库</h2>
+          <button
+            id="newProjectBtn"
+            class="icon-button"
+            title="新建项目"
+            aria-label="新建项目"
+          >
+            ＋
+          </button>
+        </div>
+        <label class="field-label" for="projectSelect">当前项目</label
+        ><select id="projectSelect">
+          <option value="">选择项目</option>
+        </select>
+        <button id="importBtn" class="button import-button">＋ 导入视频</button
+        ><input
+          id="fileInput"
+          type="file"
+          accept="video/*,.mkv,.mts"
+          multiple
+          hidden
+        />
+        <div class="section-label">
+          视频素材 <span id="sourceCount">0</span>
+        </div>
+        <div id="sourceList" class="source-list">
+          <div class="muted empty-library">
+            素材只保存在你的电脑上。<br />导入视频，开始一次剪辑。
+          </div>
+        </div>
+        <div class="library-bottom">
+          <span class="small-dot"></span>本地处理 · 无需上传云端
+        </div>
+      </aside>
+      <section class="center-stage">
+        <div class="preview-header">
+          <span>预览</span
+          ><span id="previewMeta" class="muted">你的故事，从这里开始</span>
+        </div>
+        <div id="previewArea" class="preview-area">
+          <div id="welcome" class="welcome">
+            <div class="welcome-symbol">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="eyebrow">CUT. CAPTION. CREATE.</div>
+            <h1>让每一段，<br /><em>都恰到好处。</em></h1>
+            <p>
+              选出精彩片段，让字幕跟上声音。<br />从导入到导出，都在你的电脑上完成。
+            </p>
+            <button id="welcomeImport" class="button primary large">
+              导入第一段视频 <span>↗</span>
+            </button>
+            <span class="welcome-hint">也可以将视频文件拖到此处</span>
+          </div>
+          <div id="videoFrame" class="video-frame" hidden>
+            <video id="video" playsinline preload="metadata"></video>
+            <div id="captionOverlay" class="caption-overlay"></div>
+          </div>
+          <div id="dropOverlay" class="drop-overlay" hidden>
+            松开文件，导入素材
+          </div>
+        </div>
+        <div class="transport">
+          <span id="sourceClock" class="muted mono">素材 00:00.00</span>
+          <div class="play-controls">
+            <button
+              id="backBtn"
+              class="icon-button"
+              title="回到片段开始"
+              aria-label="回到片段开始"
+            >
+              |◀</button
+            ><button
+              id="playBtn"
+              class="play-button"
+              title="播放 / 暂停（空格）"
+              aria-label="播放"
+            >
+              ▶</button
+            ><span class="mono"
+              ><strong id="outputClock">00:00.00</strong
+              ><span class="muted">
+                / <span id="totalClock">00:00.00</span></span
+              ></span
+            >
+          </div>
+          <label class="caption-toggle"
+            ><input id="showCaptions" type="checkbox" checked /> 显示字幕</label
+          >
+        </div>
+        <section class="timeline-panel">
+          <div class="timeline-toolbar">
+            <div>
+              <span class="section-label">剪辑时间线</span
+              ><span id="clipCount" class="count-pill">0 段</span>
+            </div>
+            <div class="timeline-actions">
+              <button id="splitBtn" class="button small" disabled>
+                ✂ 在播放头处分割 <kbd>S</kbd></button
+              ><button
+                id="removeClipBtn"
+                class="icon-button danger-hover"
+                aria-label="删除选中片段"
+                title="删除选中片段"
+                disabled
+              >
+                ⌫</button
+              ><label class="zoom-control"
+                >−
+                <input
+                  id="zoom"
+                  type="range"
+                  min="12"
+                  max="90"
+                  value="24"
+                  aria-label="时间线缩放"
+                />
+                ＋</label
+              >
+            </div>
+          </div>
+          <div id="timelineScroll" class="timeline-scroll">
+            <div id="timelineCanvas" class="timeline-canvas">
+              <div id="ruler" class="ruler"></div>
+              <div id="clipTrack" class="clip-track">
+                <div class="timeline-placeholder">
+                  导入视频后，片段将出现在这里
+                </div>
+              </div>
+              <div id="captionTrack" class="caption-track"></div>
+              <div id="playhead" class="playhead" hidden><span></span></div>
+            </div>
+          </div>
+          <div class="timeline-footer">
+            <span>拖动片段调整顺序 · 点击时间线定位</span
+            ><span
+              >空格 播放 <b>·</b> I 入点 <b>·</b> O 出点 <b>·</b> S 分割</span
+            >
+          </div>
+        </section>
+      </section>
+      <aside class="inspector">
+        <div class="inspector-tabs">
+          <button class="tab active" data-tab="clip">片段</button
+          ><button class="tab" data-tab="subtitles">
+            字幕 <span id="subtitleCount">0</span>
+          </button>
+        </div>
+        <div id="clipPanel" class="inspector-content">
+          <div class="section-label">片段设置</div>
+          <h3 id="selectedName">选择一个片段</h3>
+          <p id="selectedMeta" class="muted">在时间线上点击片段进行编辑。</p>
+          <div class="trim-fields">
+            <label
+              >入点 / 秒<input
+                id="trimStart"
+                type="number"
+                min="0"
+                step="0.001"
+                disabled /></label
+            ><label
+              >出点 / 秒<input
+                id="trimEnd"
+                type="number"
+                min="0"
+                step="0.001"
+                disabled
+            /></label>
+          </div>
+          <div class="two-buttons">
+            <button id="setInBtn" class="button secondary small" disabled>
+              设为入点 <kbd>I</kbd></button
+            ><button id="setOutBtn" class="button secondary small" disabled>
+              设为出点 <kbd>O</kbd>
+            </button>
+          </div>
+          <div class="inspector-rule"></div>
+          <div class="section-label">片段顺序</div>
+          <div class="two-buttons">
+            <button id="moveLeftBtn" class="button secondary small" disabled>
+              ← 向前</button
+            ><button id="moveRightBtn" class="button secondary small" disabled>
+              向后 →
+            </button>
+          </div>
+          <button id="appendBtn" class="button secondary full" disabled>
+            ＋ 再次添加此素材
+          </button>
+          <div class="help-card">
+            <span>剪辑小提示</span>
+            <p>先播放到想要的位置，再设定入点和出点。原始素材会完整保留。</p>
+          </div>
+        </div>
+        <div
+          id="subtitlesPanel"
+          class="inspector-content subtitles-panel"
+          hidden
+        >
+          <div class="section-label">为当前素材生成字幕</div>
+          <button id="transcribeBtn" class="button primary full" disabled>
+            ✧ 自动生成中文字幕
+          </button>
+          <div id="modelHint" class="muted model-hint">正在检查字幕模型…</div>
+          <div class="subtitle-list-heading">
+            <span>原素材时间轴</span
+            ><button
+              id="addCaptionBtn"
+              class="icon-button"
+              title="添加字幕"
+              aria-label="添加字幕"
+              disabled
+            >
+              ＋
+            </button>
+          </div>
+          <div id="subtitleList" class="subtitle-list">
+            <p class="muted">生成字幕后，可以在这里逐条校对文字和时间。</p>
+          </div>
+        </div>
+        <div class="jobs-panel">
+          <div class="section-label">
+            任务与导出 <span id="jobCount">0</span>
+          </div>
+          <div id="jobList"><p class="muted">导出的视频会出现在这里。</p></div>
+        </div>
+      </aside>
+    </main>
+    <dialog id="exportDialog">
+      <form method="dialog">
+        <div class="dialog-heading">
+          <h2>导出你的作品</h2>
+          <button class="icon-button" aria-label="关闭导出窗口">×</button>
+        </div>
+        <p class="muted">
+          将已保存的剪辑合成为 MP4，字幕时间会随片段重新排列。
+        </p>
+        <div class="export-summary">
+          <span>预计时长</span><strong id="exportDuration">00:00.00</strong
+          ><span>视频格式</span><strong>MP4 · H.264 · 30 fps</strong>
+        </div>
+        <label class="export-checkbox"
+          ><input id="burnCaptions" type="checkbox" checked />
+          将字幕嵌入画面</label
+        >
+        <p class="muted small-text">
+          同时提供独立 SRT 字幕文件。导出过程中可以继续预览。
+        </p>
+        <button
+          id="confirmExport"
+          type="button"
+          class="button primary full large"
+        >
+          开始导出 ↗
+        </button>
+      </form>
+    </dialog>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <div id="busy" class="busy-banner" role="status" hidden>
+      <span class="spinner"></span><span id="busyText">正在处理…</span>
+    </div>
+  </body>
+</html>

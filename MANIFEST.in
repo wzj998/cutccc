@@ -1,0 +1,3 @@
+include studio.cmd
+include transcribe.cmd
+recursive-include cutccc/web *.html *.css *.js

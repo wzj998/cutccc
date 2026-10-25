@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>cutccc · API 与 MCP</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/api-docs.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/">cutccc<span class="brand-dot">.</span></a
+      ><span class="workspace-label">API / MCP</span
+      ><a class="quiet-link" href="/">← 返回剪辑工作台</a>
+    </header>
+    <main style="max-width: 1000px; margin: 48px auto; padding: 0 24px 60px">
+      <div class="eyebrow">ONE PROJECT. THREE WAYS TO WORK.</div>
+      <h1 style="font-size: 34px; margin-bottom: 18px">
+        网页、API、MCP，共用一个项目。
+      </h1>
+      <p class="muted">
+        项目编辑采用版本检查。识别与导出返回任务编号，查询任务状态即可获取结果。
+      </p>
+      <section style="margin: 36px 0">
+        <h2 style="font-size: 18px; margin-bottom: 16px">本地 HTTP API</h2>
+        <p class="muted">
+          当前服务：<code id="apiOrigin"></code> ·
+          <a href="/openapi.json" style="color: var(--accent)"
+            >OpenAPI JSON ↗</a
+          >
+        </p>
+        <div id="endpointList" style="margin-top: 20px"></div>
+      </section>
+      <section style="margin: 36px 0">
+        <h2 style="font-size: 18px; margin-bottom: 16px">MCP 接入</h2>
+        <p class="muted">
+          先保持本地服务运行，再让 MCP 客户端启动下面的 stdio 进程。将 Python
+          路径替换为安装 cutccc 的虚拟环境路径。
+        </p>
+        <pre
+          id="mcpConfig"
+          style="
+            padding: 22px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #171e20;
+            overflow: auto;
+            line-height: 1.8;
+            font-size: 12px;
+          "
+        ></pre>
+        <p class="muted">
+          工具包括项目创建、视频导入、剪辑保存、字幕生成、导出和任务查询。MCP
+          通过同一 HTTP API 操作，网页中也能看到修改结果。
+        </p>
+      </section>
+      <section>
+        <h2 style="font-size: 18px; margin-bottom: 16px">推荐调用顺序</h2>
+        <p class="muted">
+          创建项目 → 导入视频 → 读取项目 revision → 修改 clips / subtitles →
+          保存 → 导出 →
+          查询任务。字幕时间使用原素材时间；导出时按剪辑顺序重新计算。
+        </p>
+      </section>
+    </main>
+  </body>
+</html>
