@@ -128,6 +128,7 @@ export async function render(
   if (!["", "cuda"].includes(hw))
     throw new APIError("CUTCCC_EXPORT_HWACCEL must be empty or cuda");
   const voices = project.voiceovers || [];
+  const audibleVoices = voices.filter(v => (v.volume ?? 1) > 0);
   validateVoiceovers(project.sources, clips, voices);
   const first = sources.get(clips[0].source_id),
     scale = Math.min(1, 1920 / Math.max(first.width, first.height));
@@ -164,9 +165,9 @@ export async function render(
       `concat=n=${clips.length}:v=1:a=1[vcat][acat]`,
   );
   let audio = "[acat]";
-  if (voices.length) {
+  if (audibleVoices.length) {
     const ranges = [];
-    for (const [j, v] of voices.entries()) {
+    for (const [j, v] of audibleVoices.entries()) {
       const source = sources.get(v.source_id),
         index = clips.length + j;
       args.push("-i", await sourcePath(v.source_id));
@@ -178,8 +179,8 @@ export async function render(
     filters.push(`[acat]volume=0.3:enable='${ranges.join("+")}'[ducked]`);
     filters.push(
       "[ducked]" +
-        voices.map((_, j) => `[voice${j}]`).join("") +
-        `amix=inputs=${voices.length + 1}:duration=first:normalize=0,alimiter=limit=0.98:level=false:latency=true[amixed]`,
+        audibleVoices.map((_, j) => `[voice${j}]`).join("") +
+        `amix=inputs=${audibleVoices.length + 1}:duration=first:normalize=0,alimiter=limit=0.98:level=false:latency=true[amixed]`,
     );
     audio = "[amixed]";
   }

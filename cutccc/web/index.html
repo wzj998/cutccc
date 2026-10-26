@@ -38,6 +38,8 @@
       <button id="saveBtn" class="button secondary" disabled>
         保存项目 <kbd>⌘ / Ctrl S</kbd>
       </button>
+      <button id="undoBtn" class="button secondary small" title="撤销（Ctrl+Z）" aria-keyshortcuts="Control+z Meta+z" disabled>↶ 撤销</button>
+      <button id="redoBtn" class="button secondary small" title="重做（Ctrl+Shift+Z / Ctrl+Y）" aria-keyshortcuts="Control+Shift+z Meta+Shift+z Control+y" disabled>↷ 重做</button>
       <button id="exportBtn" class="button primary" disabled>
         <span>↗</span> 导出视频
       </button>
@@ -197,6 +199,7 @@
               ><span id="clipCount" class="count-pill">0 段</span>
             </div>
             <div class="timeline-actions">
+              <button id="timelineAddCaptionBtn" class="button small" title="在当前预览位置新增字幕" disabled>＋ 新增字幕</button>
               <button id="splitBtn" class="button small" disabled>
                 ✂ 在播放头处分割 <kbd>S</kbd></button
               ><button
@@ -298,7 +301,7 @@
           <div class="inspector-rule"></div>
           <div class="section-label">旁白</div>
           <p class="muted">
-            旁白按成片时间放置，导出时混入，期间原声自动降低。可在下方单独试听。
+            旁白按成片时间放置，可单独移除语音并保留字幕。只有有声旁白播放期间会降低原声。下方可试听原音频。
           </p>
           <button id="addVoiceoverBtn" class="button secondary full" disabled>
             ＋ 将当前素材音频作为旁白
@@ -314,6 +317,9 @@
           class="inspector-content subtitles-panel"
           hidden
         >
+          <div class="subtitle-add-toolbar">
+            <button id="addCaptionBtn" class="button secondary" title="在当前素材的预览位置添加字幕" disabled>＋ 新增字幕</button>
+          </div>
           <div class="section-label">为当前素材生成字幕</div>
           <label class="field-label" for="recognitionLanguage">识别语言</label>
           <select id="recognitionLanguage">
@@ -360,16 +366,7 @@
             </fieldset>
           </details>
           <div class="subtitle-list-heading">
-            <span>原素材时间轴</span
-            ><button
-              id="addCaptionBtn"
-              class="icon-button"
-              title="添加字幕"
-              aria-label="添加字幕"
-              disabled
-            >
-              ＋
-            </button>
+            <span>原素材时间轴</span>
           </div>
           <div id="subtitleList" class="subtitle-list">
             <p class="muted">生成字幕后，可以在这里逐条校对文字和时间。</p>

@@ -2,6 +2,8 @@
 const $ = (id) => document.getElementById(id);
 let subtitleStyle;
 const subtitleStyleReady = import("/static/subtitle-style.js").then(module => { subtitleStyle = module; });
+let editHistory;
+const editHistoryReady = import("/static/edit-history.js").then(({EditHistory}) => { editHistory = new EditHistory(); });
 const state = {
   project: null,
   source: null,
@@ -11,6 +13,7 @@ const state = {
   jobs: [],
   modelsReady: false,
   busy: false,
+  saving: false,
   toastTimer: null,
   zoom: 24,
   switching: false,
@@ -87,26 +90,70 @@ async function api(path, method = "GET", body) {
   }
   return data;
 }
-function markDirty() {
-  state.dirty = true;
-  $("saveState").textContent = "有未保存的修改";
-  $("saveState").style.color = "#d9c992";
+function editSnapshot() {
+  if (!state.project) return null;
+  const p = state.project;
+  return {title: p.title, clips: p.clips, subtitles: p.subtitles, voiceovers: p.voiceovers || []};
+}
+function refreshDirtyState() {
+  state.dirty = editHistory.dirty;
+  $("saveState").textContent = state.dirty ? "有未保存的修改" : "已保存在本机";
+  $("saveState").style.color = state.dirty ? "#d9c992" : "";
   updateButtons();
 }
-function markSaved() {
-  state.dirty = false;
+function markDirty(group = null) {
+  editHistory.record(editSnapshot(), {group});
+  refreshDirtyState();
+}
+function markSaved(resetHistory = true) {
+  if (resetHistory) editHistory.reset(editSnapshot());
   state.remoteRevision = null;
-  $("saveState").textContent = "已保存在本机";
-  $("saveState").style.color = "";
-  updateButtons();
+  refreshDirtyState();
+}
+function undoEdit(redo = false) {
+  if (!state.project || state.busy || state.saving) return;
+  const edit = redo ? editHistory.redo() : editHistory.undo();
+  if (!edit) return;
+  const active = document.activeElement;
+  const row = active.closest?.("[data-cue]");
+  const focus = {id: active.id, style: active.dataset?.captionStyle, source: row?.dataset.cueSource,
+    index: row?.dataset.cue, field: active.dataset?.field, start: active.selectionStart, end: active.selectionEnd};
+  const currentTime = $("video").currentTime, previousSource = state.source;
+  const sizesChanged = Object.keys(edit.subtitles).some(id => edit.subtitles[id].length !== state.project.subtitles[id]?.length);
+  pause();
+  // Keep current sources and revision so the restored edit can be saved normally.
+  Object.assign(state.project, edit);
+  state.clip = Math.min(state.clip, state.project.clips.length - 1);
+  if (selected()) state.source = selected().source_id;
+  if (sizesChanged) state.subtitleSelection.clear();
+  state.captionRenderKey = null;
+  refreshDirtyState();
+  render();
+  const clip = selected();
+  const at = previousSource === state.source ? currentTime : clip?.start || 0;
+  setPreview(clip ? Math.max(clip.start, Math.min(at, clip.end - 1 / 30)) : at);
+  let target = focus.id ? $(focus.id) : null;
+  if (!target && focus.style) target = document.querySelector(`[data-caption-style="${focus.style}"]`);
+  if (!target && focus.source) {
+    const restoredRow = [...$("subtitleList").querySelectorAll("[data-cue]")].find(r => r.dataset.cueSource === focus.source && r.dataset.cue === focus.index);
+    target = restoredRow?.querySelector(`[data-field="${focus.field}"]`);
+  }
+  if (target && !target.disabled && target.getClientRects().length) {
+    target.focus({preventScroll: true});
+    if (focus.start !== null && focus.start !== undefined && ["text", "textarea"].includes(target.type))
+      target.setSelectionRange(focus.start, focus.end);
+  }
 }
 function updateButtons() {
   const has = Boolean(state.project),
     clip = Boolean(selected()),
     src = source();
-  $("saveBtn").disabled = !has || !state.dirty || state.busy;
-  $("exportBtn").disabled = !has || !state.project.clips.length || state.busy;
-  $("reloadBtn").disabled = !has || state.busy;
+  $("saveBtn").disabled = !has || !state.dirty || state.busy || state.saving;
+  $("undoBtn").disabled = !has || !editHistory?.canUndo || state.busy || state.saving;
+  $("redoBtn").disabled = !has || !editHistory?.canRedo || state.busy || state.saving;
+  $("exportBtn").disabled = !has || !state.project.clips.length || state.busy || state.saving;
+  $("reloadBtn").disabled = !has || state.busy || state.saving;
+  $("projectSelect").disabled = state.busy || state.saving;
   $("projectTitle").disabled = !has;
   $("importBtn").disabled = state.busy;
   $("welcomeImport").disabled = state.busy;
@@ -132,6 +179,7 @@ function updateButtons() {
   $("appendBtn").disabled = !src || state.busy;
   $("addVoiceoverBtn").disabled = !src?.has_audio || !total() || state.busy;
   $("addCaptionBtn").disabled = !src || state.busy;
+  $("timelineAddCaptionBtn").disabled = !src || state.busy;
   const running = state.jobs.some(
     (j) =>
       j.kind === "transcribe" &&
@@ -182,18 +230,27 @@ async function loadProject(id, confirmChanges = true) {
 }
 async function saveProject() {
   if (!state.project || !state.dirty) return true;
+  if (state.saving) return false;
   state.project.title = $("projectTitle").value;
   const p = state.project;
-  state.project = await api(`/api/projects/${p.id}`, "PATCH", {
-    revision: p.revision,
-    title: p.title,
-    clips: p.clips,
-    subtitles: p.subtitles,
-    voiceovers: p.voiceovers || [],
-  });
-  markSaved();
-  await projectOptions();
-  return true;
+  const sent = structuredClone(editSnapshot());
+  editHistory.breakGroup();
+  state.saving = true;
+  updateButtons();
+  try {
+    const saved = await api(`/api/projects/${p.id}`, "PATCH", {revision: p.revision, ...sent});
+    if (state.project?.id === p.id) {
+      const current = editSnapshot();
+      state.project = {...saved, ...current};
+      editHistory.markSaved(sent);
+      markSaved(false);
+      await projectOptions();
+    }
+    return true;
+  } finally {
+    state.saving = false;
+    updateButtons();
+  }
 }
 async function newProject() {
   if (state.dirty && !confirm("当前修改尚未保存，是否新建项目？")) return;
@@ -403,7 +460,7 @@ function renderVoiceovers() {
   $("voiceoverList").innerHTML = (p?.voiceovers || [])
     .map((v, i) => {
       const s = p.sources.find((s) => s.id === v.source_id);
-      return `<div class="subtitle-row" data-voice="${i}"><strong>${esc(s?.name || "旁白")}</strong><div class="trim-fields"><label>成片入点 / 秒<input type="number" min="0" step="0.001" data-voice-field="start" value="${v.start}"></label><label>音量 / 倍<input type="number" min="0" max="2" step="0.1" data-voice-field="volume" value="${v.volume ?? 1}"></label></div><audio controls preload="none" src="${mediaUrl(v.source_id)}" style="width:100%"></audio><button class="button small" data-remove-voice="${i}">删除旁白</button></div>`;
+      return `<div class="subtitle-row" data-voice="${i}"><strong>${esc(s?.name || "旁白")}</strong>${v.volume === 0 ? '<p class="muted">语音已关闭，保留字幕显示位置。</p>' : ''}<div class="trim-fields"><label>成片入点 / 秒<input type="number" min="0" step="0.001" data-voice-field="start" value="${v.start}"></label><label>音量 / 倍<input type="number" min="0" max="2" step="0.1" data-voice-field="volume" value="${v.volume ?? 1}"></label></div><audio controls preload="none" src="${mediaUrl(v.source_id)}" style="width:100%"></audio><div class="voice-actions">${v.volume === 0 ? `<button class="button small" data-restore-voice="${i}">恢复语音</button>` : `<button class="button small" data-remove-voice="${i}">仅移除语音</button>`}<button class="button small" data-remove-voice-all="${i}">移除语音及字幕</button></div></div>`;
     })
     .join("");
 }
@@ -588,7 +645,7 @@ function updateCaptionStyleField(event) {
   try { subtitleStyle.validateStyle({[key]: value}); } catch (error) { toast(error.message, true); return; }
   for (const {cue} of entries) cue.style = {...cue.style, [key]: value};
   input.indeterminate = false;
-  markDirty();
+  markDirty(`style:${entries.map(entry => entry.key).join(",")}:${key}`);
   state.captionRenderKey = null;
   renderCaptionStyleEditor();
 }
@@ -949,7 +1006,7 @@ async function pollJobs() {
   renderJobs();
   updateButtons();
   const latest = await api(`/api/projects/${id}`);
-  if (state.project?.id !== id || state.busy) return;
+  if (state.project?.id !== id || state.busy || state.saving) return;
   if (latest.revision !== state.project.revision) {
     if (state.dirty) {
       if (state.remoteRevision !== latest.revision) {
@@ -991,13 +1048,16 @@ $("reloadBtn").onclick = () =>
 $("projectTitle").oninput = (e) => {
   if (state.project) {
     state.project.title = e.target.value;
-    markDirty();
+    markDirty("title");
   }
 };
 $("saveBtn").onclick = () =>
   saveProject()
     .then(() => toast("项目已保存。"))
     .catch((e) => toast(e.message, true));
+$("undoBtn").onclick = () => undoEdit();
+$("redoBtn").onclick = () => undoEdit(true);
+document.addEventListener("focusout", () => editHistory?.breakGroup());
 $("sourceList").onclick = (e) => {
   const card = e.target.closest("[data-source]");
   if (!card) return;
@@ -1192,14 +1252,20 @@ $("voiceoverList").oninput = (e) => {
   state.project.voiceovers[Number(row.dataset.voice)][field] = Number(
     e.target.value,
   );
-  markDirty();
+  markDirty(`voice:${row.dataset.voice}:${field}`);
+  renderTimeline();
 };
 $("voiceoverList").onclick = (e) => {
-  const button = e.target.closest("[data-remove-voice]");
+  const button = e.target.closest("[data-remove-voice],[data-remove-voice-all],[data-restore-voice]");
   if (!button) return;
-  state.project.voiceovers.splice(Number(button.dataset.removeVoice), 1);
+  const index = Number(button.dataset.removeVoice ?? button.dataset.removeVoiceAll ?? button.dataset.restoreVoice);
+  const voice = state.project.voiceovers[index];
+  if (button.hasAttribute("data-restore-voice")) voice.volume = 1;
+  else if (button.hasAttribute("data-remove-voice") && state.project.subtitles[voice.source_id]?.length) voice.volume = 0;
+  else state.project.voiceovers.splice(index, 1);
   markDirty();
   renderVoiceovers();
+  renderTimeline();
 };
 for (const tab of document.querySelectorAll(".tab"))
   tab.onclick = () => {
@@ -1216,7 +1282,7 @@ $("subtitleList").oninput = (e) => {
   const cue = state.project.subtitles[row.dataset.cueSource][Number(row.dataset.cue)];
   cue[field] = field === "text" ? e.target.value : Number(e.target.value);
   if (field === "text") renderCaptionStyleEditor();
-  markDirty();
+  markDirty(`cue:${row.dataset.cueSource}:${row.dataset.cue}:${field}`);
   renderTimeline();
 };
 $("subtitleList").onclick = (e) => {
@@ -1276,7 +1342,7 @@ $("captionFocusedText").oninput = (event) => {
     row => row.dataset.cueSource === entry.sourceId && Number(row.dataset.cue) === entry.index,
   );
   if (row) row.querySelector("textarea").value = entry.cue.text;
-  markDirty();
+  markDirty(`cue:${entry.sourceId}:${entry.index}:text`);
   renderTimeline();
 };
 $("selectAllCaptions").onclick = () => {
@@ -1303,25 +1369,39 @@ $("resetCaptionStyle").onclick = () => {
   markDirty();
   renderCaptionStyleEditor();
 };
-$("addCaptionBtn").onclick = () => {
+function addCaption() {
   const s = source();
-  if (!s) return;
+  if (!s || state.busy) return;
+  pause();
   const cues = state.project.subtitles[s.id];
-  let start = $("video").currentTime;
+  const clip = selected();
+  const limit = clip?.source_id === s.id ? clip.end : s.duration;
+  const requested = Math.max($("video").currentTime, clip?.start || 0);
+  let start = requested;
   for (const c of cues) if (start >= c.start && start < c.end) start = c.end;
   const next = cues.find((c) => c.start >= start),
-    end = Math.min(start + 2, next?.start ?? s.duration, s.duration);
+    end = Math.min(start + 2, next?.start ?? limit, limit);
   if (end - start < 0.05) {
     toast("当前位置没有可用的字幕间隙，请移动播放头。", true);
     return;
   }
-  cues.push({ start, end, text: "新字幕" });
+  const cue = { start, end, text: "新字幕" };
+  cues.push(cue);
   cues.sort((a, b) => a.start - b.start);
-  state.subtitleSelection.clear();
+  const index = cues.indexOf(cue);
+  state.subtitleSelection = new Set([`${s.id}:${index}`]);
   markDirty();
+  document.querySelector('[data-tab="subtitles"]').click();
+  previewSubtitle(s.id, index);
   renderSubtitles();
   renderTimeline();
-};
+  $("captionStyleEditor").open = true;
+  $("captionStyleEditor").scrollIntoView({block: "nearest"});
+  $("captionFocusedText").focus({preventScroll: true});
+  $("captionFocusedText").select();
+  if (start - requested > .05) toast("当前位置已有字幕，已在下一段空白处新增。");
+}
+$("addCaptionBtn").onclick = $("timelineAddCaptionBtn").onclick = addCaption;
 $("transcribeBtn").onclick = async () => {
   try {
     await saveProject();
@@ -1366,6 +1446,12 @@ $("confirmExport").onclick = async () => {
   }
 };
 function handleEditorKeydown(e) {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.isComposing && !$("exportDialog").open &&
+      ["z", "y"].includes(e.key.toLowerCase())) {
+    e.preventDefault();
+    if (!e.repeat) undoEdit(e.key.toLowerCase() === "y" || e.shiftKey);
+    return;
+  }
   if (e.key === "Tab" && document.fullscreenElement === $("previewArea"))
     setFullscreenControlsVisible(true);
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
@@ -1459,7 +1545,7 @@ async function health() {
 }
 (async () => {
   try {
-    await subtitleStyleReady;
+    await Promise.all([subtitleStyleReady, editHistoryReady]);
     await health();
     await projectOptions();
     const id = localStorage.getItem("cutccc-project");

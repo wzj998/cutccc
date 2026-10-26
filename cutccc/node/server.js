@@ -422,6 +422,7 @@ export async function startServer(options = {}) {
             "api.html",
             "app.js",
             "subtitle-style.js",
+            "edit-history.js",
             "style.css",
             "api-docs.js",
           ].includes(name)

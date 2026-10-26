@@ -638,6 +638,26 @@ test(
       }),
       /fit within/,
     );
+    p = await f.studio.updateEdit(p.id, {
+      revision: p.revision, clips: p.clips,
+      subtitles: {...p.subtitles, [voice]: [{start: 0, end: .5, text: "Silent narration", style: {position: "top-center"}}]},
+      voiceovers: [{source_id: voice, start: .5, volume: 0}],
+    });
+    const silentJob = await f.studio.submit(p.id, "export");
+    const silentDone = await waitJob(f, silentJob.id);
+    assert.equal(silentDone.status, "completed", silentDone.message);
+    const ass = await fs.readFile(await f.studio.jobFile(silentJob.id, "subtitles.ass"), "utf8");
+    assert.match(ass, /Silent narration/);
+    const filters = await fs.readFile(f.studio.jobDir(silentJob.id, "filters.txt"), "utf8");
+    assert.doesNotMatch(filters, /ducked|amix/);
+    const audio = spawnSync("ffmpeg", ["-v", "error", "-i", await f.studio.jobFile(silentJob.id, "video.mp4"), "-vn", "-ac", "1", "-ar", "48000", "-f", "f32le", "pipe:1"], {windowsHide: true, maxBuffer: 4 * 1024 * 1024});
+    assert.equal(audio.status, 0);
+    const rms = at => {
+      let power = 0;
+      for (let i = Math.round(at * 48000); i < Math.round(at * 48000) + 4800; i++) power += audio.stdout.readFloatLE(i * 4) ** 2;
+      return Math.sqrt(power / 4800);
+    };
+    assert.ok(rms(.7) / rms(.2) > .9 && rms(.7) / rms(.2) < 1.1, "caption-only narration must not duck original audio");
     await f.studio.updateEdit(p.id, {
       revision: p.revision,
       clips: [{ source_id: scene, start: 0, end: 0.5 }],

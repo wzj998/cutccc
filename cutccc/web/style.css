@@ -551,8 +551,11 @@ kbd {
   paint-order: stroke fill;
 }
 .subtitle-selection-tools { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 14px; }
+.subtitle-add-toolbar { position: sticky; top: 0; z-index: 3; background: var(--panel); padding: 8px 0; margin: -8px 0 12px; }
+.subtitle-add-toolbar .button { width: 100%; }
+.voice-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .subtitle-selection-tools select { width: 100%; padding: 6px; }
-.caption-style-editor { border: 1px solid var(--line); border-radius: 6px; margin: 12px 0; padding: 9px; }
+.caption-style-editor { border: 1px solid var(--line); border-radius: 6px; margin: 12px 0; padding: 9px; scroll-margin-top: 64px; }
 .caption-style-editor summary { cursor: pointer; font-size: 11px; }
 .caption-focused-content { display: block; margin-top: 10px; font-size: 10px; color: var(--muted); }
 .caption-focused-content textarea { display: block; width: 100%; margin-top: 5px; resize: vertical; min-height: 58px; }
