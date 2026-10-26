@@ -81,8 +81,15 @@
       </aside>
       <section class="center-stage">
         <div class="preview-header">
-          <span>预览</span
-          ><span id="previewMeta" class="muted">你的故事，从这里开始</span>
+          <span>预览</span>
+          <span id="previewMeta" class="muted">你的故事，从这里开始</span>
+          <div class="preview-zoom">
+            <label for="previewZoom">缩放</label>
+            <input id="previewZoom" type="range" min="25" max="400" step="5" value="100"
+              aria-label="预览画面缩放" title="100% 为适应窗口，仅影响预览" disabled />
+            <span id="previewZoomValue" class="mono">100%</span>
+            <button id="previewFitBtn" class="button secondary small" title="恢复适应窗口并居中" disabled>适应</button>
+          </div>
         </div>
         <div id="previewArea" class="preview-area">
           <div id="welcome" class="welcome">
@@ -99,7 +106,7 @@
             </button>
             <span class="welcome-hint">也可以将视频文件拖到此处</span>
           </div>
-          <div id="videoFrame" class="video-frame" hidden>
+          <div id="videoFrame" class="video-frame" title="拖动画面调整预览位置；双击全屏" hidden>
             <video id="video" playsinline preload="metadata"></video>
             <div id="captionOverlay" class="caption-overlay"></div>
           </div>
@@ -139,6 +146,13 @@
               ▶
             </button>
             <span id="fullscreenClock" class="mono">00:00.00 / 00:00.00</span>
+            <div class="preview-zoom fullscreen-zoom">
+              <label for="fullscreenZoom">缩放</label>
+              <input id="fullscreenZoom" type="range" min="25" max="400" step="5" value="100"
+                aria-label="全屏画面缩放" title="100% 为适应窗口，仅影响预览" disabled />
+              <span id="fullscreenZoomValue" class="mono">100%</span>
+              <button id="fullscreenFitBtn" class="button secondary small" title="恢复适应窗口并居中" disabled>适应</button>
+            </div>
           </div>
           <div id="dropOverlay" class="drop-overlay" hidden>
             松开文件，导入素材
@@ -184,11 +198,12 @@
               ><button
                 id="removeClipBtn"
                 class="icon-button danger-hover"
-                aria-label="删除选中片段"
-                title="删除选中片段"
+                aria-label="删除选中片段（Delete）"
+                aria-keyshortcuts="Delete"
+                title="删除选中片段（Delete）"
                 disabled
               >
-                ⌫</button
+                <span aria-hidden="true">⌦</span> <kbd>Del</kbd></button
               ><label class="zoom-control"
                 >−
                 <input
@@ -224,7 +239,7 @@
             <span>拖动上方手柄或刻度定位 · 拖动片段调整顺序</span
             ><span
               >空格 播放 <b>·</b> F 全屏 <b>·</b> I 入点 <b>·</b> O 出点
-              <b>·</b> S 分割</span
+              <b>·</b> S 分割 <b>·</b> Del 删除</span
             >
           </div>
         </section>

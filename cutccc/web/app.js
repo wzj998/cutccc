@@ -14,6 +14,9 @@ const state = {
   switching: false,
   remoteRevision: null,
   previewToken: 0,
+  previewZoom: 1,
+  previewPan: { x: 0, y: 0 },
+  previewDrag: null,
   seekDragging: false,
   pendingOutputSeek: null,
   outputEndSelected: false,
@@ -104,6 +107,8 @@ function updateButtons() {
   $("welcomeImport").disabled = state.busy;
   $("fullscreenBtn").hidden = !src;
   $("fullscreenBtn").disabled = !src || !document.fullscreenEnabled;
+  for (const id of ["previewZoom", "fullscreenZoom", "previewFitBtn", "fullscreenFitBtn"])
+    $(id).disabled = !src;
   $("fullscreenSeek").disabled = !state.project?.clips.length;
   $("fullscreenSeek").max = total();
   for (const id of [
@@ -254,6 +259,19 @@ function render() {
   updateButtons();
   fitPreview();
 }
+function setPreviewZoom(percent) {
+  const value = Number(percent);
+  if (!Number.isFinite(value)) return;
+  const zoom = Math.max(25, Math.min(400, value));
+  state.previewZoom = zoom / 100;
+  for (const id of ["previewZoom", "fullscreenZoom"]) {
+    $(id).value = zoom;
+    $(id).setAttribute("aria-valuetext", `${zoom}%（100% 为适应窗口）`);
+  }
+  for (const id of ["previewZoomValue", "fullscreenZoomValue"])
+    $(id).textContent = `${zoom}%`;
+  fitPreview();
+}
 function fitPreview() {
   const s = source();
   if (!s) return;
@@ -269,8 +287,49 @@ function fitPreview() {
     parseFloat(css.paddingBottom);
   const ratio = s.width / s.height;
   const width = Math.min(availableWidth, availableHeight * ratio);
+  const maxX = Math.abs(availableWidth - width * state.previewZoom) / 2;
+  const maxY = Math.abs(availableHeight - (width / ratio) * state.previewZoom) / 2;
+  state.previewPan.x = Math.max(-maxX, Math.min(maxX, state.previewPan.x));
+  state.previewPan.y = Math.max(-maxY, Math.min(maxY, state.previewPan.y));
   $("videoFrame").style.width = `${width}px`;
   $("videoFrame").style.height = `${width / ratio}px`;
+  $("videoFrame").style.transform =
+    `translate(${state.previewPan.x}px, ${state.previewPan.y}px) scale(${state.previewZoom})`;
+}
+function resetPreviewView() {
+  finishPreviewPan();
+  state.previewPan = { x: 0, y: 0 };
+  setPreviewZoom(100);
+}
+function startPreviewPan(event) {
+  if (event.button !== 0 || !event.isPrimary || !source() || state.previewDrag) return;
+  event.preventDefault();
+  state.previewDrag = {
+    pointerId: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    panX: state.previewPan.x,
+    panY: state.previewPan.y,
+  };
+  $("videoFrame").setPointerCapture(event.pointerId);
+  $("videoFrame").classList.add("is-panning");
+}
+function movePreviewPan(event) {
+  const drag = state.previewDrag;
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  event.preventDefault();
+  state.previewPan.x = drag.panX + event.clientX - drag.x;
+  state.previewPan.y = drag.panY + event.clientY - drag.y;
+  fitPreview();
+}
+function finishPreviewPan(event) {
+  const drag = state.previewDrag;
+  if (!drag || (event && event.pointerId !== drag.pointerId)) return;
+  if (event?.type === "pointerup") movePreviewPan(event);
+  state.previewDrag = null;
+  $("videoFrame").classList.remove("is-panning");
+  if ($("videoFrame").hasPointerCapture(drag.pointerId))
+    $("videoFrame").releasePointerCapture(drag.pointerId);
 }
 function syncFullscreen() {
   const active = document.fullscreenElement === $("previewArea");
@@ -907,6 +966,17 @@ $("fullscreenControls").addEventListener("focusin", () =>
   setFullscreenControlsVisible(true),
 );
 $("fullscreenBtn").onclick = toggleFullscreen;
+for (const id of ["previewZoom", "fullscreenZoom"])
+  $(id).oninput = (event) => setPreviewZoom(event.target.value);
+for (const id of ["previewFitBtn", "fullscreenFitBtn"])
+  $(id).onclick = resetPreviewView;
+$("videoFrame").addEventListener("pointerdown", startPreviewPan);
+$("videoFrame").addEventListener("lostpointercapture", finishPreviewPan);
+$("videoFrame").ondragstart = (event) => event.preventDefault();
+document.addEventListener("pointermove", movePreviewPan);
+document.addEventListener("pointerup", finishPreviewPan);
+document.addEventListener("pointercancel", finishPreviewPan);
+window.addEventListener("blur", () => finishPreviewPan());
 $("videoFrame").ondblclick = toggleFullscreen;
 document.addEventListener("fullscreenchange", syncFullscreen);
 $("backBtn").onclick = () => {
@@ -1064,7 +1134,7 @@ $("confirmExport").onclick = async () => {
     toast(e.message, true);
   }
 };
-document.addEventListener("keydown", (e) => {
+function handleEditorKeydown(e) {
   if (e.key === "Tab" && document.fullscreenElement === $("previewArea"))
     setFullscreenControlsVisible(true);
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
@@ -1074,9 +1144,19 @@ document.addEventListener("keydown", (e) => {
       .catch((err) => toast(err.message, true));
     return;
   }
-  if (e.target.matches("input,textarea,select") || $("exportDialog").open)
+  if (
+    e.target.matches("input,textarea,select") ||
+    e.target.isContentEditable ||
+    e.isComposing ||
+    $("exportDialog").open
+  )
     return;
-  if (e.code === "Space") {
+  if (e.key === "Delete") {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat || state.busy || !selected())
+      return;
+    e.preventDefault();
+    removeClip();
+  } else if (e.code === "Space") {
     e.preventDefault();
     togglePlay();
   } else if (
@@ -1090,7 +1170,8 @@ document.addEventListener("keydown", (e) => {
   } else if (e.key.toLowerCase() === "s") splitClip();
   else if (e.key.toLowerCase() === "i") $("setInBtn").click();
   else if (e.key.toLowerCase() === "o") $("setOutBtn").click();
-});
+}
+document.addEventListener("keydown", handleEditorKeydown);
 let dragDepth = 0;
 document.addEventListener("dragenter", (e) => {
   if ([...e.dataTransfer.types].includes("Files")) {
