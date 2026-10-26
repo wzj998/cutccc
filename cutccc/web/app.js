@@ -13,6 +13,12 @@ const state = {
   zoom: 24,
   switching: false,
   remoteRevision: null,
+  previewToken: 0,
+  seekDragging: false,
+  seekResume: false,
+  pendingOutputSeek: null,
+  outputEndSelected: false,
+  fullscreenPointerNearBottom: false,
 };
 const esc = (value) =>
   String(value ?? "").replace(
@@ -98,6 +104,8 @@ function updateButtons() {
   $("welcomeImport").disabled = state.busy;
   $("fullscreenBtn").hidden = !src;
   $("fullscreenBtn").disabled = !src || !document.fullscreenEnabled;
+  $("fullscreenSeek").disabled = !state.project?.clips.length;
+  $("fullscreenSeek").max = total();
   for (const id of [
     "splitBtn",
     "removeClipBtn",
@@ -273,7 +281,28 @@ function syncFullscreen() {
   $("fullscreenBtn").setAttribute("aria-pressed", String(active));
   $("fullscreenBtn").title = active ? "退出全屏（Esc / F）" : "全屏预览（F）";
   $("fullscreenControls").hidden = !active;
+  if (!active) finishFullscreenSeek();
+  state.fullscreenPointerNearBottom = false;
+  setFullscreenControlsVisible(false);
   requestAnimationFrame(fitPreview);
+}
+function setFullscreenControlsVisible(visible) {
+  if (visible && document.fullscreenElement !== $("previewArea")) return;
+  $("fullscreenControls").classList.toggle("is-hidden", !visible);
+  $("fullscreenControls").setAttribute("aria-hidden", String(!visible));
+}
+function updateFullscreenControlsForPointer(event) {
+  if (document.fullscreenElement !== $("previewArea")) return;
+  const area = $("previewArea").getBoundingClientRect();
+  const revealHeight = Math.max(
+    $("fullscreenControls").offsetHeight + 24,
+    Math.min(180, area.height * 0.2),
+  );
+  state.fullscreenPointerNearBottom =
+    event.clientY >= area.bottom - revealHeight;
+  setFullscreenControlsVisible(
+    state.seekDragging || state.fullscreenPointerNearBottom,
+  );
 }
 async function toggleFullscreen() {
   if (!source()) return;
@@ -403,15 +432,20 @@ function renderJobs() {
     : '<p class="muted">导出的视频会出现在这里。</p>';
 }
 
+function setPlaying(playing) {
+  state.playing = playing;
+  for (const id of ["playBtn", "fullscreenPlayBtn"]) {
+    $(id).textContent = playing ? "Ⅱ" : "▶";
+    $(id).setAttribute("aria-label", playing ? "暂停" : "播放");
+  }
+}
 function pause() {
-  state.playing = false;
+  setPlaying(false);
   $("video").pause();
-  $("playBtn").textContent = "▶";
-  $("playBtn").setAttribute("aria-label", "播放");
-  $("fullscreenPlayBtn").textContent = "▶";
-  $("fullscreenPlayBtn").setAttribute("aria-label", "播放");
 }
 function setPreview(at = 0, autoplay = false) {
+  const token = ++state.previewToken;
+  state.outputEndSelected = false;
   const s = source();
   if (!s) {
     $("video").removeAttribute("src");
@@ -421,10 +455,12 @@ function setPreview(at = 0, autoplay = false) {
     url = mediaUrl(s.id);
   state.switching = true;
   const seek = () => {
+    if (token !== state.previewToken) return;
     video.currentTime = Math.max(0, Math.min(at, s.duration));
     state.switching = false;
-    if (autoplay) {
+    if (autoplay && state.playing && !state.seekDragging) {
       video.play().catch((e) => {
+        if (token !== state.previewToken || !state.playing) return;
         pause();
         toast("点击播放按钮开始预览。", true);
       });
@@ -434,15 +470,55 @@ function setPreview(at = 0, autoplay = false) {
     video.src = url;
     video.addEventListener("loadedmetadata", seek, { once: true });
     video.load();
+  } else if (video.readyState < 1) {
+    video.addEventListener("loadedmetadata", seek, { once: true });
   } else seek();
 }
 function selectClip(index, at, autoplay = false) {
   if (!state.project?.clips[index]) return;
   if (!autoplay) pause();
+  else setPlaying(true);
   state.clip = index;
   state.source = selected().source_id;
   render();
   setPreview(at ?? selected().start, autoplay);
+}
+function seekOutput(seconds, autoplay = state.playing) {
+  if (!Number.isFinite(seconds) || !state.project?.clips.length) return;
+  const position = Math.max(0, Math.min(seconds, total()));
+  let offset = 0;
+  for (const [index, clip] of state.project.clips.entries()) {
+    const length = duration(clip);
+    if (
+      position < offset + length ||
+      index === state.project.clips.length - 1
+    ) {
+      // The endpoint displays the last retained frame, never the trimmed tail.
+      const at = Math.max(
+        clip.start,
+        Math.min(clip.end - 1 / 30, clip.start + position - offset),
+      );
+      if (state.clip !== index || state.source !== clip.source_id)
+        selectClip(index, at, autoplay);
+      else {
+        if (!autoplay) pause();
+        else setPlaying(true);
+        setPreview(at, autoplay);
+      }
+      state.pendingOutputSeek = position;
+      state.outputEndSelected = position === total();
+      return;
+    }
+    offset += length;
+  }
+}
+function finishFullscreenSeek() {
+  if (!state.seekDragging) return;
+  const resume = state.seekResume;
+  state.seekDragging = false;
+  state.seekResume = false;
+  seekOutput(Number($("fullscreenSeek").value), resume);
+  setFullscreenControlsVisible(state.fullscreenPointerNearBottom);
 }
 function togglePlay() {
   if (!selected()) {
@@ -453,11 +529,12 @@ function togglePlay() {
     pause();
     return;
   }
-  state.playing = true;
-  $("playBtn").textContent = "Ⅱ";
-  $("playBtn").setAttribute("aria-label", "暂停");
-  $("fullscreenPlayBtn").textContent = "Ⅱ";
-  $("fullscreenPlayBtn").setAttribute("aria-label", "暂停");
+  if (state.outputEndSelected) {
+    seekOutput(0, true);
+    return;
+  }
+  setPlaying(true);
+  const token = state.previewToken;
   const c = selected();
   if (
     $("video").currentTime < c.start ||
@@ -467,6 +544,7 @@ function togglePlay() {
   $("video")
     .play()
     .catch(() => {
+      if (token !== state.previewToken || !state.playing) return;
       pause();
       toast("当前视频编码无法在浏览器中播放，仍可剪辑并导出 MP4。", true);
     });
@@ -474,7 +552,10 @@ function togglePlay() {
 function nextClip() {
   if (state.clip + 1 < state.project.clips.length)
     selectClip(state.clip + 1, undefined, true);
-  else pause();
+  else {
+    pause();
+    state.outputEndSelected = true;
+  }
 }
 function tick() {
   const video = $("video"),
@@ -497,8 +578,18 @@ function tick() {
         .reduce((s, c) => s + duration(c), 0) +
       Math.max(0, Math.min(current - c.start, duration(c)));
   }
+  if (state.outputEndSelected && !state.playing) offset = total();
+  if (state.seekDragging) offset = Number($("fullscreenSeek").value);
+  else if (state.switching && state.pendingOutputSeek !== null)
+    offset = state.pendingOutputSeek;
+  else state.pendingOutputSeek = null;
   $("outputClock").textContent = time(offset);
   $("fullscreenClock").textContent = `${time(offset)} / ${time(total())}`;
+  if (!state.seekDragging) $("fullscreenSeek").value = offset;
+  $("fullscreenSeek").setAttribute(
+    "aria-valuetext",
+    `${time(offset)} / ${time(total())}`,
+  );
   $("playhead").style.left = `${offset * state.zoom}px`;
   const cue = (state.project?.subtitles[state.source] || []).find(
     (c) => current >= c.start && current < c.end,
@@ -689,6 +780,42 @@ $("clipTrack").ondrop = (e) => {
 };
 $("playBtn").onclick = togglePlay;
 $("fullscreenPlayBtn").onclick = togglePlay;
+$("fullscreenSeek").onpointerdown = () => {
+  if ($("fullscreenSeek").disabled) return;
+  state.seekDragging = true;
+  state.fullscreenPointerNearBottom = true;
+  state.seekResume = state.playing;
+  pause();
+};
+$("fullscreenSeek").oninput = (event) => {
+  seekOutput(
+    Number(event.target.value),
+    state.seekDragging ? false : state.playing,
+  );
+};
+$("fullscreenSeek").onchange = finishFullscreenSeek;
+$("fullscreenSeek").onblur = finishFullscreenSeek;
+document.addEventListener("pointerup", finishFullscreenSeek);
+document.addEventListener("pointercancel", finishFullscreenSeek);
+$("previewArea").addEventListener(
+  "pointermove",
+  updateFullscreenControlsForPointer,
+);
+$("previewArea").addEventListener("pointerdown", (event) => {
+  if (
+    document.fullscreenElement !== $("previewArea") ||
+    $("fullscreenControls").contains(event.target)
+  )
+    return;
+  if (event.pointerType === "touch") updateFullscreenControlsForPointer(event);
+  else setFullscreenControlsVisible(false);
+});
+$("previewArea").addEventListener("pointerleave", () => {
+  if (!state.seekDragging) setFullscreenControlsVisible(false);
+});
+$("fullscreenControls").addEventListener("focusin", () =>
+  setFullscreenControlsVisible(true),
+);
 $("fullscreenBtn").onclick = toggleFullscreen;
 $("videoFrame").ondblclick = toggleFullscreen;
 document.addEventListener("fullscreenchange", syncFullscreen);
@@ -848,6 +975,8 @@ $("confirmExport").onclick = async () => {
   }
 };
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Tab" && document.fullscreenElement === $("previewArea"))
+    setFullscreenControlsVisible(true);
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
     saveProject()

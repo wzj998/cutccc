@@ -113,7 +113,24 @@
           >
             ⛶ 全屏
           </button>
-          <div id="fullscreenControls" class="fullscreen-controls" hidden>
+          <div
+            id="fullscreenControls"
+            class="fullscreen-controls is-hidden"
+            aria-hidden="true"
+            hidden
+          >
+            <input
+              id="fullscreenSeek"
+              class="fullscreen-progress"
+              type="range"
+              min="0"
+              max="0"
+              step="0.03333333333333333"
+              value="0"
+              aria-label="全屏播放进度"
+              title="点击或拖动，跳转成片播放位置"
+              disabled
+            />
             <button
               id="fullscreenPlayBtn"
               class="play-button"

@@ -396,16 +396,36 @@ kbd {
   bottom: 18px;
   left: 50%;
   transform: translateX(-50%);
-  display: flex;
+  width: min(900px, calc(100% - 36px));
+  display: grid;
+  grid-template-columns: auto 1fr;
   align-items: center;
-  gap: 14px;
+  gap: 8px 14px;
   padding: 10px 16px;
   border-radius: 10px;
   background: #111d;
   z-index: 6;
+  transition: opacity 120ms ease;
+}
+.fullscreen-controls.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 .fullscreen-controls .mono {
   white-space: nowrap;
+  justify-self: end;
+}
+.fullscreen-progress {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  touch-action: none;
 }
 .preview-area:fullscreen .caption-overlay {
   font-size: clamp(20px, 2.2vw, 40px);
