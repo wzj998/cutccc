@@ -71,6 +71,43 @@ async function waitJob(f, id) {
   }
   throw new Error("Job did not finish");
 }
+test("atomic JSON replacement retries transient locks without losing previous data", async (t) => {
+  const f = await fixture(t);
+  const file = path.join(f.root, "atomic.json");
+  await f.studio.write(file, { value: 1 });
+  const rename = fs.rename.bind(fs);
+  let attempts = 0,
+    mode = "transient";
+  t.mock.method(fs, "rename", async (from, to) => {
+    if (to !== file) return rename(from, to);
+    attempts++;
+    if (mode === "transient" && attempts > 2) return rename(from, to);
+    assert.equal(
+      JSON.parse(await fs.readFile(file, "utf8")).value,
+      mode === "transient" ? 1 : 2,
+    );
+    throw Object.assign(new Error("simulated rename failure"), {
+      code: mode === "disk" ? "ENOSPC" : "EPERM",
+    });
+  });
+  await f.studio.write(file, { value: 2 });
+  assert.equal(attempts, 3);
+  assert.equal(JSON.parse(await fs.readFile(file, "utf8")).value, 2);
+  mode = "persistent";
+  attempts = 0;
+  await assert.rejects(f.studio.write(file, { value: 3 }), { code: "EPERM" });
+  assert.equal(attempts, 6);
+  mode = "disk";
+  attempts = 0;
+  await assert.rejects(f.studio.write(file, { value: 3 }), { code: "ENOSPC" });
+  assert.equal(attempts, 1);
+  assert.equal(JSON.parse(await fs.readFile(file, "utf8")).value, 2);
+  assert.ok(
+    !(await fs.readdir(f.root)).some(
+      (name) => name.startsWith("atomic.json.") && name.endsWith(".tmp"),
+    ),
+  );
+});
 async function models(root) {
   for (const n of ["Qwen3-ASR-1.7B", "Qwen3-ForcedAligner-0.6B"]) {
     const dir = path.join(root, n);

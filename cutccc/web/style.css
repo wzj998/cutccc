@@ -377,6 +377,39 @@ kbd {
   padding: 16px 26px;
   background: radial-gradient(ellipse at center, #1b2021 0, #101213 76%);
 }
+.fullscreen-button {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 6;
+  background: #111a !important;
+}
+.preview-area:fullscreen {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 18px;
+  background: #050607;
+}
+.fullscreen-controls {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: #111d;
+  z-index: 6;
+}
+.fullscreen-controls .mono {
+  white-space: nowrap;
+}
+.preview-area:fullscreen .caption-overlay {
+  font-size: clamp(20px, 2.2vw, 40px);
+}
 .welcome {
   padding: 20px 0 28px;
   max-width: 430px;
@@ -571,6 +604,15 @@ kbd {
   height: 26px;
   position: relative;
   border-bottom: 1px solid #30383b;
+  overflow: hidden;
+}
+.ruler-end {
+  right: 0;
+  padding-right: 3px;
+}
+.ruler-end:after {
+  left: auto !important;
+  right: 0;
 }
 .ruler-label {
   position: absolute;
@@ -598,8 +640,8 @@ kbd {
 }
 .timeline-clip {
   height: 55px;
-  border: 1px solid #4d6868;
-  border-right: 3px solid #151a1b;
+  border: 0;
+  min-width: 0;
   flex-shrink: 0;
   position: relative;
   overflow: hidden;
@@ -609,8 +651,19 @@ kbd {
   user-select: none;
 }
 .timeline-clip.selected {
-  border: 2px solid var(--accent);
   background: #3c5c46;
+}
+.timeline-clip:after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid #4d6868;
+  border-right: 3px solid #151a1b;
+  border-radius: inherit;
+  pointer-events: none;
+}
+.timeline-clip.selected:after {
+  border: 2px solid var(--accent);
 }
 .timeline-clip img {
   position: absolute;
@@ -1061,9 +1114,6 @@ dialog p {
   }
   .timeline-actions .button {
     font-size: 10px;
-  }
-  .zoom-control {
-    display: none;
   }
   .transport {
     padding: 12px 15px;

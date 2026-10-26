@@ -103,6 +103,26 @@
             <video id="video" playsinline preload="metadata"></video>
             <div id="captionOverlay" class="caption-overlay"></div>
           </div>
+          <button
+            id="fullscreenBtn"
+            class="button secondary small fullscreen-button"
+            title="全屏预览（F）"
+            aria-label="全屏预览"
+            aria-pressed="false"
+            hidden
+          >
+            ⛶ 全屏
+          </button>
+          <div id="fullscreenControls" class="fullscreen-controls" hidden>
+            <button
+              id="fullscreenPlayBtn"
+              class="play-button"
+              aria-label="播放"
+            >
+              ▶
+            </button>
+            <span id="fullscreenClock" class="mono">00:00.00 / 00:00.00</span>
+          </div>
           <div id="dropOverlay" class="drop-overlay" hidden>
             松开文件，导入素材
           </div>
@@ -157,9 +177,10 @@
                 <input
                   id="zoom"
                   type="range"
-                  min="12"
-                  max="90"
-                  value="24"
+                  min="0"
+                  max="100"
+                  value="0"
+                  title="最小：显示完整时间轴"
                   aria-label="时间线缩放"
                 />
                 ＋</label
@@ -181,7 +202,8 @@
           <div class="timeline-footer">
             <span>拖动片段调整顺序 · 点击时间线定位</span
             ><span
-              >空格 播放 <b>·</b> I 入点 <b>·</b> O 出点 <b>·</b> S 分割</span
+              >空格 播放 <b>·</b> F 全屏 <b>·</b> I 入点 <b>·</b> O 出点
+              <b>·</b> S 分割</span
             >
           </div>
         </section>
@@ -235,8 +257,12 @@
           </button>
           <div class="inspector-rule"></div>
           <div class="section-label">旁白</div>
-          <p class="muted">旁白按成片时间放置，导出时混入，期间原声自动降低。可在下方单独试听。</p>
-          <button id="addVoiceoverBtn" class="button secondary full" disabled>＋ 将当前素材音频作为旁白</button>
+          <p class="muted">
+            旁白按成片时间放置，导出时混入，期间原声自动降低。可在下方单独试听。
+          </p>
+          <button id="addVoiceoverBtn" class="button secondary full" disabled>
+            ＋ 将当前素材音频作为旁白
+          </button>
           <div id="voiceoverList"></div>
           <div class="help-card">
             <span>剪辑小提示</span>

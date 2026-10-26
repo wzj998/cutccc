@@ -170,7 +170,23 @@ export class Studio {
     const temp = file + "." + uuid() + ".tmp";
     await fs.writeFile(temp, JSON.stringify(value, null, 2) + "\n", "utf8");
     try {
-      await fs.rename(temp, file);
+      // Windows readers and antivirus scanners can briefly block replacement.
+      // Retain the previous JSON until an atomic rename succeeds.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await fs.rename(temp, file);
+          break;
+        } catch (error) {
+          if (
+            attempt >= 5 ||
+            !["EPERM", "EACCES", "EBUSY"].includes(error.code)
+          )
+            throw error;
+          await new Promise((resolve) =>
+            setTimeout(resolve, 20 * 2 ** attempt),
+          );
+        }
+      }
     } catch (e) {
       await fs.unlink(temp).catch(() => {});
       throw e;

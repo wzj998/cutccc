@@ -96,6 +96,8 @@ function updateButtons() {
   $("projectTitle").disabled = !has;
   $("importBtn").disabled = state.busy;
   $("welcomeImport").disabled = state.busy;
+  $("fullscreenBtn").hidden = !src;
+  $("fullscreenBtn").disabled = !src || !document.fullscreenEnabled;
   for (const id of [
     "splitBtn",
     "removeClipBtn",
@@ -261,6 +263,28 @@ function fitPreview() {
   $("videoFrame").style.width = `${width}px`;
   $("videoFrame").style.height = `${width / ratio}px`;
 }
+function syncFullscreen() {
+  const active = document.fullscreenElement === $("previewArea");
+  $("fullscreenBtn").textContent = active ? "⛶ 退出全屏" : "⛶ 全屏";
+  $("fullscreenBtn").setAttribute(
+    "aria-label",
+    active ? "退出全屏" : "全屏预览",
+  );
+  $("fullscreenBtn").setAttribute("aria-pressed", String(active));
+  $("fullscreenBtn").title = active ? "退出全屏（Esc / F）" : "全屏预览（F）";
+  $("fullscreenControls").hidden = !active;
+  requestAnimationFrame(fitPreview);
+}
+async function toggleFullscreen() {
+  if (!source()) return;
+  try {
+    if (document.fullscreenElement === $("previewArea"))
+      await document.exitFullscreen();
+    else await $("previewArea").requestFullscreen();
+  } catch (error) {
+    toast("无法切换全屏预览：" + error.message, true);
+  }
+}
 function renderInspector() {
   const c = selected(),
     s = source();
@@ -302,18 +326,34 @@ function mappedCues() {
 }
 function renderTimeline() {
   const p = state.project;
+  const scroll = $("timelineScroll");
+  const previousZoom = state.zoom;
+  const previousTime = scroll.scrollLeft / previousZoom;
+  const seconds = total();
   $("clipCount").textContent = `${p?.clips.length || 0} 段`;
-  $("totalClock").textContent = time(total());
-  const width = Math.max(
-    total() * state.zoom,
-    $("timelineScroll").clientWidth - 1,
-    300,
-  );
+  $("totalClock").textContent = time(seconds);
+  const viewportWidth = Math.max(1, scroll.clientWidth - 1);
+  const fitScale = seconds > 0 ? viewportWidth / seconds : 24;
+  const maxScale = Math.max(90, fitScale * 4);
+  const zoom = Number($("zoom").value) / 100;
+  state.zoom = fitScale * Math.pow(maxScale / fitScale, zoom);
+  const width = Math.max(seconds * state.zoom, viewportWidth);
   $("timelineCanvas").style.width = `${width}px`;
-  const step = state.zoom < 20 ? 5 : state.zoom < 50 ? 2 : 1;
+  $("zoom").setAttribute(
+    "aria-valuetext",
+    zoom === 0 ? "完整时间轴" : `${Math.round((state.zoom / fitScale) * 100)}%`,
+  );
+  const targetStep = 64 / state.zoom;
+  const step =
+    [
+      0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600,
+    ].find((value) => value >= targetStep) ||
+    Math.ceil(targetStep / 3600) * 3600;
   let ruler = "";
-  for (let t = 0; t <= width / state.zoom; t += step)
-    ruler += `<span class="ruler-label" style="left:${t * state.zoom}px">${time(t).slice(0, 5)}</span>`;
+  for (let t = 0; t * state.zoom < width - (seconds > 0 ? 70 : 40); t += step)
+    ruler += `<span class="ruler-label" style="left:${t * state.zoom}px">${step < 1 ? time(t) : time(t).slice(0, -3)}</span>`;
+  if (seconds > 0)
+    ruler += `<span class="ruler-label ruler-end" title="成片结束">${time(seconds)}</span>`;
   $("ruler").innerHTML = ruler;
   $("clipTrack").innerHTML = p?.clips.length
     ? p.clips
@@ -330,6 +370,7 @@ function renderTimeline() {
     )
     .join("");
   $("playhead").hidden = !p?.clips.length;
+  scroll.scrollLeft = zoom === 0 ? 0 : previousTime * state.zoom;
 }
 function renderSubtitles() {
   const cues = state.project?.subtitles[state.source] || [];
@@ -367,6 +408,8 @@ function pause() {
   $("video").pause();
   $("playBtn").textContent = "▶";
   $("playBtn").setAttribute("aria-label", "播放");
+  $("fullscreenPlayBtn").textContent = "▶";
+  $("fullscreenPlayBtn").setAttribute("aria-label", "播放");
 }
 function setPreview(at = 0, autoplay = false) {
   const s = source();
@@ -413,6 +456,8 @@ function togglePlay() {
   state.playing = true;
   $("playBtn").textContent = "Ⅱ";
   $("playBtn").setAttribute("aria-label", "暂停");
+  $("fullscreenPlayBtn").textContent = "Ⅱ";
+  $("fullscreenPlayBtn").setAttribute("aria-label", "暂停");
   const c = selected();
   if (
     $("video").currentTime < c.start ||
@@ -453,6 +498,7 @@ function tick() {
       Math.max(0, Math.min(current - c.start, duration(c)));
   }
   $("outputClock").textContent = time(offset);
+  $("fullscreenClock").textContent = `${time(offset)} / ${time(total())}`;
   $("playhead").style.left = `${offset * state.zoom}px`;
   const cue = (state.project?.subtitles[state.source] || []).find(
     (c) => current >= c.start && current < c.end,
@@ -642,6 +688,10 @@ $("clipTrack").ondrop = (e) => {
   moveClip(Number(target.dataset.clip));
 };
 $("playBtn").onclick = togglePlay;
+$("fullscreenPlayBtn").onclick = togglePlay;
+$("fullscreenBtn").onclick = toggleFullscreen;
+$("videoFrame").ondblclick = toggleFullscreen;
+document.addEventListener("fullscreenchange", syncFullscreen);
 $("backBtn").onclick = () => {
   if (selected()) {
     pause();
@@ -656,10 +706,7 @@ $("video").onerror = () => {
   pause();
   toast("浏览器无法预览当前编码。可以继续设置剪辑范围并导出兼容的 MP4。", true);
 };
-$("zoom").oninput = (e) => {
-  state.zoom = Number(e.target.value);
-  renderTimeline();
-};
+$("zoom").oninput = () => renderTimeline();
 $("splitBtn").onclick = splitClip;
 $("removeClipBtn").onclick = removeClip;
 $("trimStart").onchange = () =>
@@ -813,6 +860,14 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "Space") {
     e.preventDefault();
     togglePlay();
+  } else if (
+    e.key.toLowerCase() === "f" &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey
+  ) {
+    e.preventDefault();
+    toggleFullscreen();
   } else if (e.key.toLowerCase() === "s") splitClip();
   else if (e.key.toLowerCase() === "i") $("setInBtn").click();
   else if (e.key.toLowerCase() === "o") $("setOutBtn").click();
