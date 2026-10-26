@@ -15,7 +15,6 @@ const state = {
   remoteRevision: null,
   previewToken: 0,
   seekDragging: false,
-  seekResume: false,
   pendingOutputSeek: null,
   outputEndSelected: false,
   fullscreenPointerNearBottom: false,
@@ -535,10 +534,8 @@ function seekOutput(seconds, autoplay = state.playing) {
 }
 function finishFullscreenSeek() {
   if (!state.seekDragging) return;
-  const resume = state.seekResume;
   state.seekDragging = false;
-  state.seekResume = false;
-  seekOutput(Number($("fullscreenSeek").value), resume);
+  seekOutput(Number($("fullscreenSeek").value), false);
   setFullscreenControlsVisible(state.fullscreenPointerNearBottom);
 }
 function scrubTimeline(event) {
@@ -567,7 +564,6 @@ function startTimelineScrub(event) {
   state.timelineScrub = {
     pointerId: event.pointerId,
     target,
-    resume: state.playing,
     grabOffset: target === $("playheadHandle") ? event.clientX - left : 0,
     position: Number($("fullscreenSeek").value),
   };
@@ -584,7 +580,7 @@ function finishTimelineScrub(event) {
   $("timelineCanvas").classList.remove("is-scrubbing");
   if (drag.target.hasPointerCapture(drag.pointerId))
     drag.target.releasePointerCapture(drag.pointerId);
-  seekOutput(drag.position, drag.resume);
+  seekOutput(drag.position, false);
 }
 function togglePlay() {
   if (!selected()) {
@@ -879,7 +875,6 @@ $("fullscreenSeek").onpointerdown = () => {
   if ($("fullscreenSeek").disabled) return;
   state.seekDragging = true;
   state.fullscreenPointerNearBottom = true;
-  state.seekResume = state.playing;
   pause();
 };
 $("fullscreenSeek").oninput = (event) => {
