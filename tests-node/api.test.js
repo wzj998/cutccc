@@ -1,0 +1,488 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { startServer } from "../cutccc/node/server.js";
+import { Studio } from "../cutccc/node/studio.js";
+import { capture } from "../cutccc/node/processes.js";
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const hasFFmpeg =
+  spawnSync("ffmpeg", ["-version"], { windowsHide: true }).status === 0;
+const hasPython =
+  spawnSync("python", ["--version"], { windowsHide: true }).status === 0;
+async function fixture(t) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cutccc-node-test-"));
+  const app = await startServer({
+    port: 0,
+    dataDir: path.join(root, "data"),
+    modelsDir: path.join(root, "models"),
+  });
+  t.after(async () => {
+    await app.close();
+    assert.ok(root.startsWith(path.join(os.tmpdir(), "cutccc-node-test-")));
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  async function request(route, method = "GET", value, headers = {}) {
+    const r = await fetch(app.url + route, {
+      method,
+      headers: {
+        ...(value === undefined ? {} : { "Content-Type": "application/json" }),
+        ...headers,
+      },
+      body: value === undefined ? undefined : JSON.stringify(value),
+    });
+    return { status: r.status, body: await r.json() };
+  }
+  return { ...app, root, request };
+}
+async function fakeSource(f) {
+  const p = await f.studio.createProject("Example"),
+    sid = randomUUID().replaceAll("-", "");
+  p.sources = [
+    {
+      id: sid,
+      name: "example.mp4",
+      file: sid + ".mp4",
+      subtitle_version: 0,
+      duration: 10,
+      width: 320,
+      height: 180,
+      has_audio: true,
+    },
+  ];
+  p.clips = [{ source_id: sid, start: 0, end: 10 }];
+  p.subtitles = { [sid]: [] };
+  await fs.writeFile(
+    f.studio.projectDir(p.id, "media", sid + ".mp4"),
+    "test-video",
+  );
+  await f.studio.save(p);
+  return p;
+}
+async function waitJob(f, id) {
+  for (let i = 0; i < 400; i++) {
+    const j = await f.studio.getJob(id);
+    if (["completed", "failed"].includes(j.status)) return j;
+    await wait(50);
+  }
+  throw new Error("Job did not finish");
+}
+async function models(root) {
+  for (const n of ["Qwen3-ASR-1.7B", "Qwen3-ForcedAligner-0.6B"]) {
+    const dir = path.join(root, n);
+    await fs.mkdir(dir, { recursive: true });
+    for (const file of [
+      "config.json",
+      "preprocessor_config.json",
+      "tokenizer_config.json",
+      "vocab.json",
+      "merges.txt",
+      "model.safetensors",
+    ])
+      await fs.writeFile(path.join(dir, file), "{}");
+  }
+}
+test("health, UI, schema and local-origin protections", async (t) => {
+  const f = await fixture(t),
+    h = await f.request("/api/health");
+  assert.equal(h.body.runtime, "nodejs");
+  assert.equal(h.body.models_ready, false);
+  assert.match(await (await fetch(f.url)).text(), /本地剪辑工作台/);
+  assert.ok((await f.request("/openapi.json")).body.paths["/api/projects"]);
+  assert.equal(
+    (
+      await f.request(
+        "/api/projects",
+        "POST",
+        {},
+        { Origin: "https://unrelated.invalid" },
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await f.request("/api/projects", "POST", { unknown: 1 })).status,
+    422,
+  );
+  assert.equal((await f.request("/api/projects/not-an-id")).status, 400);
+  assert.equal((await f.request("/api/jobs/" + "a".repeat(32))).status, 404);
+});
+test("simultaneous saves cannot overwrite revisions; invalid changes are atomic", async (t) => {
+  const f = await fixture(t),
+    p = await fakeSource(f),
+    id = p.sources[0].id;
+  const edit = {
+    revision: p.revision,
+    clips: [{ source_id: id, start: 1, end: 3 }],
+    subtitles: { [id]: [{ start: 1, end: 2, text: "字幕" }] },
+  };
+  const results = await Promise.all([
+    f.request(`/api/projects/${p.id}`, "PATCH", edit),
+    f.request(`/api/projects/${p.id}`, "PATCH", edit),
+  ]);
+  assert.deepEqual(results.map((r) => r.status).sort(), [200, 409]);
+  const current = await f.studio.getProject(p.id);
+  assert.equal(current.sources[0].subtitle_version, 1);
+  assert.equal(
+    (
+      await f.request(`/api/projects/${p.id}`, "PATCH", {
+        ...edit,
+        revision: current.revision,
+        clips: [{ source_id: id, start: 3, end: 2 }],
+      })
+    ).status,
+    400,
+  );
+  assert.equal((await f.studio.getProject(p.id)).revision, current.revision);
+});
+test("Range, suffix, HEAD and optional browser proxies preserve originals", async (t) => {
+  const f = await fixture(t),
+    p = await fakeSource(f),
+    id = p.sources[0].id,
+    url = `${f.url}/api/projects/${p.id}/sources/${id}/media`;
+  let r = await fetch(url, { headers: { Range: "bytes=0-3" } });
+  assert.equal(r.status, 206);
+  assert.equal(await r.text(), "test");
+  r = await fetch(url, { headers: { Range: "bytes=-5" } });
+  assert.equal(await r.text(), "video");
+  assert.equal(
+    (await fetch(url, { headers: { Range: "bytes=100-200" } })).status,
+    416,
+  );
+  assert.equal(
+    (await fetch(url, { method: "HEAD" })).headers.get("content-length"),
+    "10",
+  );
+  await fs.writeFile(
+    f.studio.projectDir(p.id, "media", id + ".preview.mp4"),
+    "preview",
+  );
+  assert.equal(await (await fetch(url)).text(), "preview");
+  assert.equal(
+    await fs.readFile(await f.studio.sourcePath(p.id, id), "utf8"),
+    "test-video",
+  );
+});
+test("data directory locking and restart recovery retain existing project JSON", async (t) => {
+  const f = await fixture(t),
+    p = await fakeSource(f);
+  await assert.rejects(
+    Studio.create({ dataDir: f.studio.root }),
+    /already used/,
+  );
+  const id = "b".repeat(32);
+  await fs.mkdir(f.studio.jobDir(id));
+  await f.studio.write(f.studio.jobDir(id, "job.json"), {
+    id,
+    project_id: p.id,
+    status: "running",
+  });
+  await f.close();
+  const reopened = await Studio.create({ dataDir: f.studio.root });
+  assert.equal((await reopened.getJob(id)).status, "failed");
+  assert.equal((await reopened.getProject(p.id)).title, p.title);
+  await reopened.close();
+});
+test("duplicate transcription and concurrent manual edits are protected", async (t) => {
+  const f = await fixture(t),
+    p = await fakeSource(f),
+    id = p.sources[0].id;
+  await models(f.studio.models);
+  let release, started;
+  const gate = new Promise((r) => {
+      release = r;
+    }),
+    ready = new Promise((r) => {
+      started = r;
+    });
+  f.studio.runProcess = async (jid, cmd, args, folder) => {
+    started();
+    await gate;
+    await fs.mkdir(path.join(folder, "transcription"));
+    await fs.writeFile(
+      path.join(folder, "transcription", "result.json"),
+      JSON.stringify({
+        duration_seconds: 10,
+        cues: [{ start: 0, end: 1, text: "generated" }],
+      }),
+    );
+  };
+  const j = await f.studio.submit(p.id, "transcribe", { source_id: id });
+  await ready;
+  await assert.rejects(
+    f.studio.submit(p.id, "transcribe", { source_id: id }),
+    /already active/,
+  );
+  try {
+    await f.studio.updateEdit(p.id, {
+      revision: p.revision,
+      clips: p.clips,
+      subtitles: { [id]: [{ start: 0, end: 1, text: "manual" }] },
+    });
+  } finally {
+    release();
+  }
+  assert.match((await waitJob(f, j.id)).message, /edited during transcription/);
+  assert.equal(
+    (await f.studio.getProject(p.id)).subtitles[id][0].text,
+    "manual",
+  );
+});
+test(
+  "actual Python worker JSON events and result files update a Node-owned job",
+  { skip: !hasPython },
+  async (t) => {
+    const f = await fixture(t),
+      p = await fakeSource(f),
+      sid = p.sources[0].id;
+    await models(f.studio.models);
+    const script = path.join(f.root, "worker.py");
+    await fs.writeFile(
+      script,
+      `import json,pathlib\nprint(json.dumps({'stage':'loading_asr','chunks':1}),flush=True)\nprint(json.dumps({'stage':'transcribed','index':0}),flush=True)\nprint(json.dumps({'stage':'loading_aligner'}),flush=True)\nprint(json.dumps({'stage':'aligned','index':0}),flush=True)\np=pathlib.Path('transcription');p.mkdir();(p/'result.json').write_text(json.dumps({'duration_seconds':10,'cues':[{'start':1,'end':2,'text':'worker result'}]}),encoding='utf-8')\n`,
+    );
+    const run = f.studio.runProcess.bind(f.studio);
+    f.studio.runProcess = (jid, command, args, folder, duration) => {
+      assert.equal(args[2], "cutccc");
+      return run(jid, "python", [script], folder, duration);
+    };
+    const job = await f.studio.submit(p.id, "transcribe", { source_id: sid }),
+      done = await waitJob(f, job.id);
+    assert.equal(done.status, "completed", done.message);
+    assert.equal(done.result.subtitle_count, 1);
+    assert.equal(
+      (await f.studio.getProject(p.id)).subtitles[sid][0].text,
+      "worker result",
+    );
+    assert.match(
+      await fs.readFile(f.studio.jobDir(job.id, "process.log"), "utf8"),
+      /loading_asr/,
+    );
+  },
+);
+test("shutdown terminates owned child processes and releases the project directory", async (t) => {
+  const f = await fixture(t),
+    p = await fakeSource(f),
+    id = "e".repeat(32);
+  await fs.mkdir(f.studio.jobDir(id));
+  await f.studio.write(f.studio.jobDir(id, "job.json"), {
+    id,
+    project_id: p.id,
+    status: "running",
+    progress: 0,
+  });
+  const result = f.studio
+    .runProcess(
+      id,
+      process.execPath,
+      ["-e", "setInterval(()=>{},1000)"],
+      f.studio.jobDir(id),
+    )
+    .catch((e) => e);
+  await wait(40);
+  const child = [...f.studio.processes][0];
+  assert.ok(child?.pid);
+  await f.close();
+  await result;
+  assert.throws(() => process.kill(child.pid, 0));
+  const reopened = await Studio.create({ dataDir: f.studio.root });
+  await reopened.close();
+});
+test(
+  "multipart import streams real video and rejects incomplete uploads",
+  { skip: !hasFFmpeg },
+  async (t) => {
+    const f = await fixture(t),
+      p = await f.studio.createProject("Upload"),
+      file = path.join(f.root, "source.mp4");
+    await capture("ffmpeg", [
+      "-nostdin",
+      "-v",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "color=red:s=160x90:r=30:d=0.2",
+      "-c:v",
+      "libx264",
+      file,
+    ]);
+    const form = new FormData();
+    form.append("file", new Blob([await fs.readFile(file)]), "sample.mp4");
+    const r = await fetch(`${f.url}/api/projects/${p.id}/sources/upload`, {
+      method: "POST",
+      body: form,
+    });
+    assert.equal(r.status, 201, await r.clone().text());
+    assert.equal((await r.json()).sources.length, 1);
+    const bad = await fetch(`${f.url}/api/projects/${p.id}/sources/upload`, {
+      method: "POST",
+      headers: { "Content-Type": "multipart/form-data; boundary=test" },
+      body: '--test\r\nContent-Disposition: form-data; name="file"; filename="bad.mp4"\r\n\r\nincomplete',
+    });
+    assert.equal(bad.status, 400);
+    assert.deepEqual(await fs.readdir(path.join(f.studio.root, "uploads")), []);
+  },
+);
+test(
+  "real export reorders silent video, retimes subtitles and mixes timed voiceovers",
+  { skip: !hasFFmpeg },
+  async (t) => {
+    const f = await fixture(t);
+    let p = await f.studio.createProject("Synthetic export");
+    for (const [name, color, freq, duration] of [
+      ["scene", "red", 440, 2],
+      ["silent", "blue", null, 2],
+      ["voice", "black", 1000, 0.5],
+    ]) {
+      const file = path.join(f.root, name + ".mp4"),
+        args = [
+          "-nostdin",
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          `color=${color}:s=160x90:r=30:d=${duration}`,
+        ];
+      if (freq)
+        args.push(
+          "-f",
+          "lavfi",
+          "-i",
+          `sine=frequency=${freq}:duration=${duration}`,
+          "-c:a",
+          "aac",
+        );
+      args.push(
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-t",
+        String(duration),
+        file,
+      );
+      await capture("ffmpeg", args);
+      p = await f.studio.importPath(p.id, file);
+    }
+    const [scene, silent, voice] = p.sources.map((s) => s.id),
+      voices = [{ source_id: voice, start: 1.2, volume: 1 }];
+    const edit = {
+      revision: p.revision,
+      clips: [
+        { source_id: silent, start: 0.5, end: 1.5 },
+        { source_id: scene, start: 0, end: 1 },
+      ],
+      subtitles: { [scene]: [{ start: 0.2, end: 0.8, text: "Sample" }] },
+      voiceovers: voices,
+    };
+    p = await f.studio.updateEdit(p.id, edit);
+    const { voiceovers: ignored, ...older } = edit;
+    p = await f.studio.updateEdit(p.id, { ...older, revision: p.revision });
+    assert.deepEqual(p.voiceovers, voices);
+    const job = await f.studio.submit(p.id, "export");
+    p = await f.studio.updateEdit(p.id, {
+      revision: p.revision,
+      clips: [{ source_id: scene, start: 0, end: 2 }],
+      subtitles: p.subtitles,
+    });
+    const done = await waitJob(f, job.id);
+    assert.equal(done.status, "completed", done.message);
+    assert.ok(Math.abs(done.result.duration - 2) < 0.1);
+    const file = await f.studio.jobFile(job.id, "video.mp4");
+    assert.match(
+      await fs.readFile(
+        await f.studio.jobFile(job.id, "subtitles.srt"),
+        "utf8",
+      ),
+      /00:00:01,200 --> 00:00:01,800/,
+    );
+    for (const [at, index] of [
+      [0.2, 2],
+      [1.1, 0],
+    ]) {
+      const raw = await new Promise((resolve, reject) => {
+        const child = spawnSync(
+          "ffmpeg",
+          [
+            "-v",
+            "error",
+            "-ss",
+            String(at),
+            "-i",
+            file,
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=1:1",
+            "-pix_fmt",
+            "rgb24",
+            "-f",
+            "rawvideo",
+            "pipe:1",
+          ],
+          { windowsHide: true },
+        );
+        child.status === 0
+          ? resolve(child.stdout)
+          : reject(new Error(child.stderr.toString()));
+      });
+      assert.equal(raw.indexOf(Math.max(...raw)), index);
+    }
+    const raw = spawnSync(
+      "ffmpeg",
+      [
+        "-v",
+        "error",
+        "-i",
+        file,
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "48000",
+        "-f",
+        "f32le",
+        "pipe:1",
+      ],
+      { windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+    );
+    assert.equal(raw.status, 0);
+    const amplitude = (at, hz) => {
+      let re = 0,
+        im = 0;
+      const start = Math.round(at * 48000);
+      for (let i = 0; i < 4800; i++) {
+        const v = raw.stdout.readFloatLE((start + i) * 4),
+          a = (2 * Math.PI * hz * i) / 48000;
+        re += v * Math.cos(a);
+        im += v * Math.sin(a);
+      }
+      return Math.hypot(re, im) / 4800;
+    };
+    assert.ok(amplitude(1.35, 1000) > amplitude(1.05, 1000) * 20);
+    assert.ok(amplitude(1.35, 440) < amplitude(1.05, 440) * 0.45);
+    assert.ok(amplitude(1.8, 440) > amplitude(1.05, 440) * 0.9);
+    assert.ok(amplitude(1.8, 1000) < amplitude(1.35, 1000) * 0.05);
+    await capture("ffmpeg", ["-v", "error", "-i", file, "-f", "null", "-"]);
+    await assert.rejects(
+      f.studio.updateEdit(p.id, {
+        revision: p.revision,
+        clips: [{ source_id: scene, start: 0, end: 0.5 }],
+        subtitles: p.subtitles,
+      }),
+      /fit within/,
+    );
+    await f.studio.updateEdit(p.id, {
+      revision: p.revision,
+      clips: [{ source_id: scene, start: 0, end: 0.5 }],
+      subtitles: p.subtitles,
+      voiceovers: [],
+    });
+  },
+);

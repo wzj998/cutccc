@@ -68,6 +68,14 @@ class FileTests(unittest.TestCase):
             self.assertEqual(main(["download", "--models-dir", "models"]), 0)
             download.assert_called_once_with(Path("models").resolve())
 
+    def test_python_serve_entry_forwards_to_node_without_importing_web_runtime(self):
+        with patch("cutccc.cli.shutil.which", return_value="node"), patch("cutccc.cli.subprocess.call", return_value=0) as call:
+            self.assertEqual(main(["serve", "--port", "18766", "--data-dir", "external project"]), 0)
+            command = call.call_args.args[0]
+            self.assertEqual(command[0], "node")
+            self.assertTrue(command[1].endswith("cli.js"))
+            self.assertEqual(command[-2:], ["--data-dir", "external project"])
+
 
 if __name__ == "__main__":
     unittest.main()

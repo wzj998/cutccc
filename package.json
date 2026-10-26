@@ -1,0 +1,24 @@
+{
+  "name": "cutccc",
+  "version": "0.3.0",
+  "description": "Local video editing with a Node.js service and Python inference workers",
+  "type": "module",
+  "bin": {
+    "cutccc": "cutccc/node/cli.js"
+  },
+  "scripts": {
+    "start": "node cutccc/node/cli.js serve",
+    "test": "node --test tests-node/*.test.js",
+    "check": "node --check cutccc/web/app.js && node --check cutccc/web/api-docs.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "cutccc/node",
+    "cutccc/web",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT"
+}

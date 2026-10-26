@@ -1,13 +1,13 @@
 @echo off
 setlocal
-set PYTHONUTF8=1
-if not exist "%~dp0.venv\Scripts\python.exe" (
-  echo Install cutccc[web,mcp] in .venv first. See README.md.
+where node >nul 2>nul
+if errorlevel 1 (
+  echo Install Node.js 22 or newer first. See README.md.
   pause
   exit /b 1
 )
 echo Open http://127.0.0.1:18765/ in your browser after startup.
-"%~dp0.venv\Scripts\python.exe" -m cutccc serve %*
+node "%~dp0cutccc\node\cli.js" serve %*
 set "RESULT=%ERRORLEVEL%"
 pause
 exit /b %RESULT%

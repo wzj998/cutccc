@@ -1,3 +1,7 @@
 include studio.cmd
 include transcribe.cmd
+include package.json
+include package-lock.json
 recursive-include cutccc/web *.html *.css *.js
+recursive-include cutccc/node *.js package.json
+recursive-include tests-node *.js

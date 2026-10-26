@@ -109,6 +109,7 @@ function updateButtons() {
   $("moveRightBtn").disabled =
     !clip || state.clip === state.project.clips.length - 1;
   $("appendBtn").disabled = !src || state.busy;
+  $("addVoiceoverBtn").disabled = !src?.has_audio || !total() || state.busy;
   $("addCaptionBtn").disabled = !src || state.busy;
   const running = state.jobs.some(
     (j) =>
@@ -166,6 +167,7 @@ async function saveProject() {
     title: p.title,
     clips: p.clips,
     subtitles: p.subtitles,
+    voiceovers: p.voiceovers || [],
   });
   markSaved();
   await projectOptions();
@@ -235,6 +237,7 @@ function render() {
     : "你的故事，从这里开始";
   renderTimeline();
   renderInspector();
+  renderVoiceovers();
   renderSubtitles();
   renderJobs();
   updateButtons();
@@ -268,6 +271,15 @@ function renderInspector() {
   $("trimStart").value = c ? c.start.toFixed(3) : "";
   $("trimEnd").value = c ? c.end.toFixed(3) : "";
   $("trimStart").max = $("trimEnd").max = s?.duration || 0;
+}
+function renderVoiceovers() {
+  const p = state.project;
+  $("voiceoverList").innerHTML = (p?.voiceovers || [])
+    .map((v, i) => {
+      const s = p.sources.find((s) => s.id === v.source_id);
+      return `<div class="subtitle-row" data-voice="${i}"><strong>${esc(s?.name || "旁白")}</strong><div class="trim-fields"><label>成片入点 / 秒<input type="number" min="0" step="0.001" data-voice-field="start" value="${v.start}"></label><label>音量 / 倍<input type="number" min="0" max="2" step="0.1" data-voice-field="volume" value="${v.volume ?? 1}"></label></div><audio controls preload="none" src="${mediaUrl(v.source_id)}" style="width:100%"></audio><button class="button small" data-remove-voice="${i}">删除旁白</button></div>`;
+    })
+    .join("");
 }
 function mappedCues() {
   let offset = 0,
@@ -667,6 +679,30 @@ $("appendBtn").onclick = () => {
   markDirty();
   render();
   setPreview(0);
+};
+$("addVoiceoverBtn").onclick = () => {
+  const s = source();
+  if (!s?.has_audio) return;
+  state.project.voiceovers ||= [];
+  state.project.voiceovers.push({ source_id: s.id, start: 0, volume: 1 });
+  markDirty();
+  renderVoiceovers();
+};
+$("voiceoverList").oninput = (e) => {
+  const row = e.target.closest("[data-voice]"),
+    field = e.target.dataset.voiceField;
+  if (!row || !field) return;
+  state.project.voiceovers[Number(row.dataset.voice)][field] = Number(
+    e.target.value,
+  );
+  markDirty();
+};
+$("voiceoverList").onclick = (e) => {
+  const button = e.target.closest("[data-remove-voice]");
+  if (!button) return;
+  state.project.voiceovers.splice(Number(button.dataset.removeVoice), 1);
+  markDirty();
+  renderVoiceovers();
 };
 for (const tab of document.querySelectorAll(".tab"))
   tab.onclick = () => {

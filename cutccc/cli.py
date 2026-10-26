@@ -1,6 +1,8 @@
 """Command-line interface with no GPU imports until transcription starts."""
 
 import argparse
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -33,18 +35,18 @@ def main(argv=None):
             from .pipeline import transcribe_file
             transcribe_file(args.input, args.output, args.models_dir)
         elif args.command == "serve":
-            import uvicorn
-            from .api import create_app
             if not 1 <= args.port <= 65535:
                 raise ValueError("Port must be between 1 and 65535")
-            app = create_app(args.data_dir, args.models_dir, args.inference_python)
-            uvicorn.run(app, host="127.0.0.1", port=args.port, workers=1)
+            command = node_command("serve", "--port", str(args.port), "--models-dir", str(args.models_dir),
+                                   "--inference-python", args.inference_python or sys.executable)
+            if args.data_dir is not None:
+                command.extend(["--data-dir", str(args.data_dir)])
+            return subprocess.call(command)
         elif args.command == "mcp":
-            from .mcp_server import create_mcp
-            create_mcp(args.api_url).run(transport="stdio")
+            return subprocess.call(node_command("mcp", "--api-url", args.api_url))
         return 0
     except ImportError as exc:
-        print(f"cutccc: optional dependency missing ({exc.name}); install cutccc[web,mcp] or cutccc[inference] as needed", file=sys.stderr)
+        print(f"cutccc: optional dependency missing ({exc.name}); install cutccc[inference] as needed", file=sys.stderr)
         return 1
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"cutccc: {exc}", file=sys.stderr)
@@ -52,3 +54,10 @@ def main(argv=None):
     except KeyboardInterrupt:
         print("cutccc: interrupted; partial outputs are retained", file=sys.stderr)
         return 130
+
+
+def node_command(*args):
+    node = shutil.which("node")
+    if not node:
+        raise RuntimeError("Node.js 22 or newer is required for serve and mcp")
+    return [node, str(Path(__file__).parent / "node" / "cli.js"), *args]

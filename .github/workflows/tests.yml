@@ -13,13 +13,19 @@ jobs:
         include:
           - os: ubuntu-latest
             python: '3.10'
+            node: '22'
           - os: ubuntu-latest
             python: '3.12'
+            node: '24'
           - os: windows-latest
             python: '3.12'
+            node: '24'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
@@ -30,6 +36,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg fonts-noto-cjk
       - run: python -m unittest discover -s tests -v
+      - run: npm test
       - run: python -m cutccc --help
       - run: node --check cutccc/web/app.js
       - run: node --check cutccc/web/api-docs.js

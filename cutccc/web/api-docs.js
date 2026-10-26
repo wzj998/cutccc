@@ -4,8 +4,13 @@ document.getElementById("mcpConfig").textContent = JSON.stringify(
   {
     mcpServers: {
       cutccc: {
-        command: "/path/to/venv/python",
-        args: ["-m", "cutccc", "mcp", "--api-url", location.origin],
+        command: "node",
+        args: [
+          "/absolute/path/to/cutccc/node/cli.js",
+          "mcp",
+          "--api-url",
+          location.origin,
+        ],
       },
     },
   },
