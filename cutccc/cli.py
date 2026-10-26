@@ -8,18 +8,20 @@ from pathlib import Path
 
 from . import __version__
 from .models import default_models_dir, download_models
+from .recognition import LANGUAGES
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="cutccc: local Chinese video/audio to SRT")
+    parser = argparse.ArgumentParser(description="cutccc: local Chinese/English speech to original-language subtitles")
     parser.add_argument("--version", action="version", version=f"cutccc {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
     download = commands.add_parser("download", help="Download official Qwen models (~6.5 GB)")
     download.add_argument("--models-dir", type=Path, default=default_models_dir())
-    transcribe = commands.add_parser("transcribe", help="Generate Chinese subtitles offline (NVIDIA CUDA)")
+    transcribe = commands.add_parser("transcribe", help="Generate original-language subtitles and a recognition review report")
     transcribe.add_argument("input", type=Path, help="Local video or audio file")
     transcribe.add_argument("-o", "--output", type=Path, help="New output directory; never overwrite existing directories")
     transcribe.add_argument("--models-dir", type=Path, default=default_models_dir())
+    transcribe.add_argument("--language", choices=LANGUAGES, default="auto", help="auto preserves Chinese and English as spoken")
     serve = commands.add_parser("serve", help="Start the local web editor and HTTP API")
     serve.add_argument("--port", type=int, default=18765)
     serve.add_argument("--data-dir", type=Path)
@@ -33,7 +35,7 @@ def main(argv=None):
             download_models(args.models_dir.expanduser().resolve())
         elif args.command == "transcribe":
             from .pipeline import transcribe_file
-            transcribe_file(args.input, args.output, args.models_dir)
+            transcribe_file(args.input, args.output, args.models_dir, language=args.language)
         elif args.command == "serve":
             if not 1 <= args.port <= 65535:
                 raise ValueError("Port must be between 1 and 65535")

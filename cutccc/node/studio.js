@@ -365,11 +365,17 @@ export class Studio {
       return j;
     });
   }
-  async submit(id, kind, { source_id, burn_subtitles = true } = {}) {
+  async submit(
+    id,
+    kind,
+    { source_id, burn_subtitles = true, language = "auto" } = {},
+  ) {
     return this.exclusive(async () => {
       if (this.closed) throw new Error("Server is shutting down");
       const p = await this.getProject(id);
       if (kind === "transcribe") {
+        if (!["auto", "Chinese", "English"].includes(language))
+          throw new APIError("language must be auto, Chinese or English");
         await this.sourcePath(id, source_id);
         await validateModels(this.models);
         if (
@@ -401,6 +407,7 @@ export class Studio {
         message: "等待处理",
         created_at: now(),
         project_revision: p.revision,
+        ...(kind === "transcribe" ? { language } : {}),
       };
       await this.write(this.jobDir(jid, "job.json"), j);
       await this.write(this.jobDir(jid, "project-snapshot.json"), p);
@@ -442,6 +449,8 @@ export class Studio {
       } else if (line.startsWith("{"))
         try {
           const e = JSON.parse(line);
+          if (e.stage === "detecting_speech")
+            queueUpdate({ progress: 3, message: "正在检测人声并检查遗漏" });
           if (e.stage === "loading_asr") {
             chunks = e.chunks || 1;
             queueUpdate({ progress: 5, message: "正在加载字幕模型" });
@@ -516,6 +525,8 @@ export class Studio {
             this.models,
             "--output",
             path.join(folder, "transcription"),
+            "--language",
+            j.language || "auto",
           ],
           folder,
         );
@@ -542,12 +553,22 @@ export class Studio {
         result = {
           subtitle_count: generated.cues.length,
           duration: generated.duration_seconds,
+          language: generated.language || j.language || "auto",
+          review_count: generated.review_count || 0,
         };
+        for (const [name, key, route] of [
+          ["review.txt", "review_url", "review"],
+          ["subtitles.srt", "subtitles_url", "subtitles"],
+          ["transcript.txt", "transcript_url", "transcript"],
+        ]) {
+          if (await exists(path.join(folder, "transcription", name)))
+            result[key] = `/api/jobs/${jid}/${route}`;
+        }
       }
       await this.updateJob(jid, {
         status: "completed",
         progress: 100,
-        message: "处理完成",
+        message: j.kind === "transcribe" && result.review_count ? `识别完成，${result.review_count}处需复核` : "处理完成",
         result,
         finished_at: now(),
       });
@@ -561,14 +582,32 @@ export class Studio {
   }
   async jobFile(id, name) {
     const j = await this.getJob(id);
-    if (!["video.mp4", "subtitles.srt", "process.log"].includes(name))
+    if (
+      ![
+        "video.mp4",
+        "subtitles.srt",
+        "process.log",
+        "review.txt",
+        "transcript.txt",
+      ].includes(name)
+    )
       throw new APIError("Unknown output file");
     if (
       name !== "process.log" &&
-      (j.status !== "completed" || j.kind !== "export")
+      (j.status !== "completed" || !["export", "transcribe"].includes(j.kind))
     )
-      throw new APIError("Export is not complete");
-    const file = this.jobDir(id, name);
+      throw new APIError("Task is not complete");
+    if (name === "video.mp4" && j.kind !== "export")
+      throw new APIError("This task has no video output");
+    if (
+      ["review.txt", "transcript.txt"].includes(name) &&
+      j.kind !== "transcribe"
+    )
+      throw new APIError("This task has no recognition report");
+    const file =
+      j.kind === "transcribe" && name !== "process.log"
+        ? this.jobDir(id, "transcription", name)
+        : this.jobDir(id, name);
     if (!(await exists(file))) throw new APIError("Output file not found", 404);
     return file;
   }

@@ -89,6 +89,7 @@ async function sendFile(req, res, file, { name } = {}) {
     ".mp4": "video/mp4",
     ".srt": "text/plain; charset=utf-8",
     ".log": "text/plain; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
   };
   const headers = {
     ...SECURITY,
@@ -241,6 +242,8 @@ const ROUTES = [
   ["get", "/api/jobs/{id}/video", "下载MP4"],
   ["get", "/api/jobs/{id}/subtitles", "下载SRT"],
   ["get", "/api/jobs/{id}/log", "任务日志"],
+  ["get", "/api/jobs/{id}/review", "未识别及待复核区间（原素材时间）"],
+  ["get", "/api/jobs/{id}/transcript", "下载原文转写"],
 ];
 export function openapi() {
   const str = { type: "string" },
@@ -298,7 +301,17 @@ export function openapi() {
       },
       ["revision", "clips", "subtitles"],
     ),
-    Transcription: schema({ source_id: str }, ["source_id"]),
+    Transcription: schema(
+      {
+        source_id: str,
+        language: {
+          type: "string",
+          enum: ["auto", "Chinese", "English"],
+          default: "auto",
+        },
+      },
+      ["source_id"],
+    ),
     Export: schema({ burn_subtitles: { type: "boolean", default: true } }, []),
   };
   const paths = {};
@@ -483,7 +496,11 @@ export async function startServer(options = {}) {
           return;
         }
         if (rest === "transcribe" && method === "POST") {
-          const b = object(await body(req), ["source_id"], ["source_id"]);
+          const b = object(
+            await body(req),
+            ["source_id", "language"],
+            ["source_id"],
+          );
           json(res, 202, await studio.submit(id, "transcribe", b));
           return;
         }
@@ -498,7 +515,10 @@ export async function startServer(options = {}) {
           return;
         }
       }
-      m = /^\/api\/jobs\/([^/]+)(?:\/(video|subtitles|log))?$/.exec(route);
+      m =
+        /^\/api\/jobs\/([^/]+)(?:\/(video|subtitles|log|review|transcript))?$/.exec(
+          route,
+        );
       if (m && (method === "GET" || method === "HEAD")) {
         if (!m[2]) {
           json(res, 200, await studio.getJob(m[1]));
@@ -508,6 +528,8 @@ export async function startServer(options = {}) {
           video: ["video.mp4", "cutccc-export.mp4"],
           subtitles: ["subtitles.srt", "subtitles.srt"],
           log: ["process.log", null],
+          review: ["review.txt", "recognition-review.txt"],
+          transcript: ["transcript.txt", "transcript.txt"],
         };
         const [file, name] = names[m[2]];
         await sendFile(req, res, await studio.jobFile(m[1], file), { name });

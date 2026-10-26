@@ -56,7 +56,12 @@ class FileTests(unittest.TestCase):
     def test_cli_dispatches_without_loading_gpu(self):
         with patch("cutccc.pipeline.transcribe_file") as run:
             self.assertEqual(main(["transcribe", "video.mp4", "--models-dir", "models"]), 0)
-            run.assert_called_once_with(Path("video.mp4"), None, Path("models"))
+            run.assert_called_once_with(Path("video.mp4"), None, Path("models"), language="auto")
+
+    def test_cli_preserves_explicit_english_recognition_mode(self):
+        with patch("cutccc.pipeline.transcribe_file") as run:
+            self.assertEqual(main(["transcribe", "video.mp4", "--language", "English", "--models-dir", "models"]), 0)
+            run.assert_called_once_with(Path("video.mp4"), None, Path("models"), language="English")
 
     def test_cli_reports_failure(self):
         with patch("cutccc.pipeline.transcribe_file", side_effect=ValueError("bad input")), contextlib.redirect_stderr(io.StringIO()) as stderr:

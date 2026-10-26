@@ -19,6 +19,7 @@ const state = {
   pendingOutputSeek: null,
   outputEndSelected: false,
   fullscreenPointerNearBottom: false,
+  timelineScrub: null,
 };
 const esc = (value) =>
   String(value ?? "").replace(
@@ -129,13 +130,14 @@ function updateButtons() {
   );
   $("transcribeBtn").disabled =
     !src || !src.has_audio || !state.modelsReady || state.busy || running;
+  $("recognitionLanguage").disabled = state.busy || running;
   $("modelHint").textContent = !state.modelsReady
     ? "字幕模型未下载，请按使用说明运行 cutccc download。"
     : src && !src.has_audio
       ? "此素材没有音轨，可手动添加字幕。"
       : running
         ? "正在后台生成字幕，可在下方查看进度。"
-        : "识别在本机完成，结果可以逐条修改。";
+        : "保留中文和英文原文；降噪复听后，疑似遗漏和不确定区间会列入复核清单。";
 }
 async function projectOptions() {
   const data = await api("/api/projects");
@@ -413,6 +415,25 @@ function renderSubtitles() {
         .join("")
     : '<p class="muted" style="margin-top:18px">生成字幕后，可以在这里逐条校对文字和时间，也可以点击 ＋ 手动添加。</p>';
 }
+function recognitionLinks(job) {
+  if (job.status !== "completed" || job.kind !== "transcribe" || !job.result)
+    return "";
+  const result = job.result;
+  const links = [
+    result.subtitles_url
+      ? `<a href="${esc(result.subtitles_url)}" download>原文 SRT ↓</a>`
+      : "",
+    result.transcript_url
+      ? `<a href="${esc(result.transcript_url)}" download>转写文字 ↓</a>`
+      : "",
+    result.review_url
+      ? `<a href="${esc(result.review_url)}" download>待复核清单（${result.review_count || 0}处）↓</a>`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("");
+  return links ? `<div class="job-links">${links}</div>` : "";
+}
 function renderJobs() {
   const labels = {
     queued: "排队中",
@@ -426,7 +447,7 @@ function renderJobs() {
         .slice(0, 8)
         .map(
           (j) =>
-            `<div class="job ${j.status}"><div class="job-head"><span>${j.kind === "export" ? "↗ 视频导出" : "✧ 自动字幕"}</span><span>${labels[j.status]}</span></div><div class="job-message">${esc(j.message)}</div>${["queued", "running"].includes(j.status) ? `<progress max="100" value="${j.progress}"></progress>` : ""}${j.status === "completed" && j.kind === "export" ? `<div class="job-links"><a href="${j.result.video_url}" download>下载视频 ↓</a><a href="${j.result.subtitles_url}" download>字幕 SRT ↓</a></div>` : ""}${j.status === "failed" ? `<a class="quiet-link" href="/api/jobs/${j.id}/log" target="_blank" rel="noopener">查看任务日志 ↗</a>` : ""}</div>`,
+            `<div class="job ${j.status}"><div class="job-head"><span>${j.kind === "export" ? "↗ 视频导出" : "✧ 自动字幕"}</span><span>${labels[j.status]}</span></div>${j.source_id ? `<div class="job-message">${esc(state.project?.sources.find((s) => s.id === j.source_id)?.name || "")}</div>` : ""}<div class="job-message">${esc(j.message)}</div>${["queued", "running"].includes(j.status) ? `<progress max="100" value="${j.progress}"></progress>` : ""}${j.status === "completed" && j.kind === "export" ? `<div class="job-links"><a href="${j.result.video_url}" download>下载视频 ↓</a><a href="${j.result.subtitles_url}" download>字幕 SRT ↓</a></div>` : ""}${recognitionLinks(j)}${j.status === "failed" ? `<a class="quiet-link" href="/api/jobs/${j.id}/log" target="_blank" rel="noopener">查看任务日志 ↗</a>` : ""}</div>`,
         )
         .join("")
     : '<p class="muted">导出的视频会出现在这里。</p>';
@@ -520,6 +541,51 @@ function finishFullscreenSeek() {
   seekOutput(Number($("fullscreenSeek").value), resume);
   setFullscreenControlsVisible(state.fullscreenPointerNearBottom);
 }
+function scrubTimeline(event) {
+  const drag = state.timelineScrub;
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  event.preventDefault();
+  const left = $("timelineCanvas").getBoundingClientRect().left;
+  drag.position = Math.max(
+    0,
+    Math.min(total(), (event.clientX - left - drag.grabOffset) / state.zoom),
+  );
+  seekOutput(drag.position, false);
+}
+function startTimelineScrub(event) {
+  if (
+    event.button !== 0 ||
+    !event.isPrimary ||
+    !state.project?.clips.length ||
+    state.timelineScrub
+  )
+    return;
+  event.preventDefault();
+  event.stopPropagation();
+  const target = event.currentTarget;
+  const left = $("playhead").getBoundingClientRect().left;
+  state.timelineScrub = {
+    pointerId: event.pointerId,
+    target,
+    resume: state.playing,
+    grabOffset: target === $("playheadHandle") ? event.clientX - left : 0,
+    position: Number($("fullscreenSeek").value),
+  };
+  pause();
+  target.setPointerCapture(event.pointerId);
+  $("timelineCanvas").classList.add("is-scrubbing");
+  scrubTimeline(event);
+}
+function finishTimelineScrub(event) {
+  const drag = state.timelineScrub;
+  if (!drag || (event && event.pointerId !== drag.pointerId)) return;
+  if (event?.type === "pointerup") scrubTimeline(event);
+  state.timelineScrub = null;
+  $("timelineCanvas").classList.remove("is-scrubbing");
+  if (drag.target.hasPointerCapture(drag.pointerId))
+    drag.target.releasePointerCapture(drag.pointerId);
+  seekOutput(drag.position, drag.resume);
+}
 function togglePlay() {
   if (!selected()) {
     if (state.project?.clips.length) selectClip(0);
@@ -579,7 +645,8 @@ function tick() {
       Math.max(0, Math.min(current - c.start, duration(c)));
   }
   if (state.outputEndSelected && !state.playing) offset = total();
-  if (state.seekDragging) offset = Number($("fullscreenSeek").value);
+  if (state.timelineScrub) offset = state.timelineScrub.position;
+  else if (state.seekDragging) offset = Number($("fullscreenSeek").value);
   else if (state.switching && state.pendingOutputSeek !== null)
     offset = state.pendingOutputSeek;
   else state.pendingOutputSeek = null;
@@ -591,6 +658,9 @@ function tick() {
     `${time(offset)} / ${time(total())}`,
   );
   $("playhead").style.left = `${offset * state.zoom}px`;
+  $("playheadHandle").setAttribute("aria-valuemax", total());
+  $("playheadHandle").setAttribute("aria-valuenow", offset);
+  $("playheadHandle").setAttribute("aria-valuetext", time(offset));
   const cue = (state.project?.subtitles[state.source] || []).find(
     (c) => current >= c.start && current < c.end,
   );
@@ -692,7 +762,7 @@ async function pollJobs() {
       setPreview(c ? Math.max(c.start, Math.min(currentTime, c.end)) : 0);
       toast(
         justFinished
-          ? "中文字幕已生成，可以开始校对。"
+          ? "原文字幕已生成，请查看任务中的待复核清单。"
           : "项目已同步其他入口的修改。",
       );
     }
@@ -758,6 +828,10 @@ $("clipTrack").onkeydown = (e) => {
   }
 };
 $("clipTrack").ondragstart = (e) => {
+  if (state.timelineScrub) {
+    e.preventDefault();
+    return;
+  }
   const clip = e.target.closest("[data-clip]");
   if (clip) {
     e.dataTransfer.setData("text/x-cutccc-clip", clip.dataset.clip);
@@ -779,6 +853,27 @@ $("clipTrack").ondrop = (e) => {
   moveClip(Number(target.dataset.clip));
 };
 $("playBtn").onclick = togglePlay;
+for (const target of [$("playheadHandle"), $("ruler")]) {
+  target.addEventListener("pointerdown", startTimelineScrub);
+  target.addEventListener("lostpointercapture", finishTimelineScrub);
+}
+document.addEventListener("pointermove", scrubTimeline);
+document.addEventListener("pointerup", finishTimelineScrub);
+document.addEventListener("pointercancel", finishTimelineScrub);
+$("playheadHandle").onclick = (event) => event.stopPropagation();
+$("playheadHandle").ondragstart = (event) => event.preventDefault();
+$("playheadHandle").onkeydown = (event) => {
+  let position = Number($("fullscreenSeek").value);
+  if (event.key === "Home") position = 0;
+  else if (event.key === "End") position = total();
+  else if (event.key === "ArrowLeft") position -= event.shiftKey ? 1 : 1 / 30;
+  else if (event.key === "ArrowRight") position += event.shiftKey ? 1 : 1 / 30;
+  else return;
+  event.preventDefault();
+  event.stopPropagation();
+  seekOutput(position);
+};
+window.addEventListener("blur", () => finishTimelineScrub());
 $("fullscreenPlayBtn").onclick = togglePlay;
 $("fullscreenSeek").onpointerdown = () => {
   if ($("fullscreenSeek").disabled) return;
@@ -942,7 +1037,7 @@ $("transcribeBtn").onclick = async () => {
     const job = await api(
       `/api/projects/${state.project.id}/transcribe`,
       "POST",
-      { source_id: state.source },
+      { source_id: state.source, language: $("recognitionLanguage").value },
     );
     state.jobs.unshift(job);
     renderJobs();

@@ -625,6 +625,9 @@ kbd {
   position: relative;
   border-bottom: 1px solid #30383b;
   overflow: hidden;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
 }
 .ruler-end {
   right: 0;
@@ -755,13 +758,38 @@ kbd {
 }
 .playhead > span {
   position: absolute;
-  left: -5px;
-  top: -3px;
-  width: 11px;
-  height: 8px;
+  left: -12px;
+  top: -22px;
+  width: 24px;
+  height: 26px;
+  pointer-events: auto;
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+}
+.playhead > span:after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  bottom: 0;
+  width: 12px;
+  height: 10px;
   border-radius: 2px;
   background: #e6eeeb;
   clip-path: polygon(0 0, 100% 0, 100% 50%, 50% 100%, 0 50%);
+}
+.playhead > span:hover:after,
+.playhead > span:focus-visible:after,
+.timeline-canvas.is-scrubbing .playhead > span:after {
+  background: var(--accent);
+}
+.playhead > span:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+.timeline-canvas.is-scrubbing {
+  cursor: ew-resize;
+  user-select: none;
 }
 .timeline-footer {
   display: flex;
@@ -877,6 +905,10 @@ kbd {
   font-size: 10px;
   margin-top: 10px;
 }
+#recognitionLanguage {
+  width: 100%;
+  margin-top: 8px;
+}
 .subtitle-list-heading {
   display: flex;
   align-items: center;
@@ -975,6 +1007,7 @@ kbd {
 }
 .job-links {
   display: flex;
+  flex-wrap: wrap;
   gap: 13px;
   margin-top: 7px;
   color: var(--accent);

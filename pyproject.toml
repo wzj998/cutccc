@@ -15,7 +15,7 @@ keywords = ["subtitles", "asr", "qwen", "chinese", "offline"]
 dependencies = []
 
 [project.optional-dependencies]
-inference = ["qwen-asr==0.0.6", "numpy>=1.26,<3", "soundfile>=0.12"]
+inference = ["qwen-asr==0.0.6", "numpy>=1.26,<3", "soundfile>=0.12", "silero-vad==6.2.3"]
 web = []
 mcp = []
 test = ["numpy>=1.26,<3", "mcp>=1.20,<2"]

@@ -1,6 +1,6 @@
 # cutccc
 
-本地视频剪辑与中文字幕工作台。**Node.js 负责主服务，Python 负责模型推理**。网页 UI、本地 HTTP API 和 MCP 使用同一份工程，可裁剪、重排、编辑字幕、叠加少量旁白，并导出 MP4 和 SRT。
+本地视频剪辑与中英原文字幕工作台。**Node.js 负责主服务，Python 负责模型推理**。网页 UI、本地 HTTP API 和 MCP 使用同一份工程，可裁剪、重排、编辑字幕、叠加少量旁白，并导出 MP4 和 SRT。
 
 工程、素材、缓存与成片保存在配置的数据目录。语音模型下载后在本机离线运行。
 
@@ -45,7 +45,8 @@ node cutccc/node/cli.js serve --port 18765 --data-dir E:/video-work/studio --mod
 - 全屏底部进度条支持点击、拖动和方向键跳转，按成片时间跨片段定位；拖动结束后恢复之前的播放或暂停状态。
 - 全屏播放按钮和进度条在鼠标移至屏幕底部时显示，移开或点击画面其他区域时隐藏；拖动期间保持可见，键盘 `Tab` 可调出控制栏。
 - 将时间轴缩放条拉到最左端可显示完整成片；刻度和最小缩放随片长及窗口宽度自动调整。
-- 生成自动字幕，修改每句文字和原素材时间。
+- 自动识别中英文人声并保留原文，修改每句文字和原素材时间；可选择纯中文或纯英文模式。
+- 对比原声及语音频段降噪版本，完整扫描音频并对疑似人声短句复听；任务中可下载原文 SRT、转写文字及未识别 / 待复核清单。
 - 保存工程，导出 H.264 / AAC MP4，可选择烧录字幕，并下载重新排列后的 SRT。
 - 在“片段”面板添加、调整或删除旁白，单独试听其音频。
 - 在任务面板查看进度、失败日志和完成的输出。
@@ -82,6 +83,8 @@ Node 服务对数据目录加单实例锁；任务串行执行。保存时版本
 | GET | `/api/jobs/{id}/video` | 下载导出的 MP4 |
 | GET | `/api/jobs/{id}/subtitles` | 下载导出的 SRT |
 | GET | `/api/jobs/{id}/log` | 处理日志 |
+| GET | `/api/jobs/{id}/review` | 下载识别复核清单（原素材时间） |
+| GET | `/api/jobs/{id}/transcript` | 下载原文转写 |
 
 服务监听 `127.0.0.1`，拒绝外站 Origin，不提供公网访问或用户账号体系。
 
@@ -102,7 +105,9 @@ Node 服务对数据目录加单实例锁；任务串行执行。保存时版本
 
 旁白字段示例：`"voiceovers":[{"source_id":"VOICE_SOURCE_ID","start":3,"volume":1}]`。旁白 `start` 使用**成片秒数**，必须完整落在成片内，音量范围0–2倍。省略该字段时保留已有旁白，传空数组清空。
 
-任务状态为 `queued/running/completed/failed`；只有完成的导出提供视频和字幕文件。
+任务状态为 `queued/running/completed/failed`；处理完成后提供对应的下载文件。
+
+识别请求接受可选的 `language`：`auto`（默认，中文及英文保留原文）、`Chinese`、`English`。混合录音使用 `auto`；单一语种模式适用于对应语种录音。识别结果的 `review_count` 和 `review_url` 提供待复核区间；识别任务的 `subtitles_url` 使用原素材时间，导出任务的同名链接使用成片时间。
 
 ## MCP
 
@@ -127,7 +132,7 @@ node cutccc/node/cli.js mcp --api-url http://127.0.0.1:18765
 
 ## Python 推理环境
 
-推荐 Python **3.12**，包支持3.10以上。自动字幕使用 **Qwen3-ASR-1.7B** 和 **Qwen3-ForcedAligner-0.6B**，需要 NVIDIA CUDA 与 BF16 支持，例如 Ampere 或更新显卡。
+推荐 Python **3.12**，包支持3.10以上。自动字幕使用 **Qwen3-ASR-1.7B** 和 **Qwen3-ForcedAligner-0.6B**，需要 NVIDIA CUDA 与 BF16 支持，例如 Ampere 或更新显卡。人声检测使用 `silero-vad`，其检测模型随该 Python 依赖安装，在本机 CPU 上运行。
 
 在独立 Python 环境中安装：
 
@@ -143,12 +148,16 @@ python -m venv .venv
 推理进程由 Node 启动：
 
 ```text
-<inference-python> -u -m cutccc transcribe <source> --models-dir <models> --output <new-output-folder>
+<inference-python> -u -m cutccc transcribe <source> --models-dir <models> --output <new-output-folder> --language auto
 ```
 
-Python 标准输出逐行输出 JSON 事件 `loading_asr`、`transcribed`、`loading_aligner`、`aligned`、`complete`；标准错误写入日志。Node 将事件转换为任务进度，成功后读取 `result.json`，检查工程版本并保存字幕。错误退出或中断会使任务失败，保留中间文件。
+Python 标准输出逐行输出 JSON 事件 `detecting_speech`、`loading_asr`、`transcribed`、`loading_aligner`、`aligned`、`complete`；标准错误写入日志。Node 将事件转换为任务进度，成功后读取 `result.json`，检查工程版本并保存字幕。错误退出或中断会使任务失败，保留中间文件。
 
-推理先识别、释放 ASR 模型，再加载对齐模型。时间来自模型对齐，不按文字长度均分。噪声、口音和重叠对话需要人工校对；无可靠时间跨度时保留失败诊断。
+推理先在完整音频上扫描，避免仅依赖人声检测而漏掉轻声或电台声，再对原声及降噪版本检测的人声短句复听。默认由模型自动识别语种，英文不翻译为中文；中文、英文混合段按原文保存。处理完 ASR 后释放模型，再加载对齐模型。时间来自模型对齐，不按文字长度均分。
+
+疑似遗漏、语种 / 文本冲突、无可靠时间戳的文字都会写入 `review.json` 与 `review.txt`。无时间跨度的词只在相邻短语已有测量时间时并入该短语，否则保留在报告；不会编造时间戳。局部无法对齐不会使整段识别失败。没有识别出文字时会输出空 SRT 和复核报告。
+
+报告属于自动查漏，不代表已人工确认所有人声。重叠说话、低信噪比、强失真仍可能漏检或识别错误；纯人声检测也可能把噪声误判为疑似人声。可结合报告中的时间区间及原声 / 降噪候选进行校对。
 
 独立命令也保留：
 
@@ -157,7 +166,7 @@ Python 标准输出逐行输出 JSON 事件 `loading_asr`、`transcribed`、`loa
 node cutccc/node/cli.js transcribe video.mp4 --models-dir E:/models --inference-python E:/inference/.venv/Scripts/python.exe
 ```
 
-输出目录必须尚不存在。输出包括 `subtitles.srt`、`transcript.txt`、`result.json`、原始识别 / 对齐 JSON 和16kHz WAV。Windows `transcribe.cmd` 继续使用仓库的 `.venv`。
+输出目录必须尚不存在。输出包括 `subtitles.srt`、`transcript.txt`、`result.json`、`review.txt`、`review.json`、原始识别 / 对齐 JSON、人声检测结果及原声 / 降噪16kHz WAV。Windows `transcribe.cmd` 继续使用仓库的 `.venv`。
 
 ## 导出与兼容预览
 
@@ -194,5 +203,6 @@ GitHub Actions 在 Linux / Windows 上运行两侧测试并构建 Python 包。�
 代码采用 [MIT License](LICENSE)。模型与依赖遵循各自许可证，不随项目分发。
 
 - [Qwen3-ASR 官方项目](https://github.com/QwenLM/Qwen3-ASR)
+- [Silero VAD 人声检测](https://github.com/snakers4/silero-vad)
 - [Qwen3-ASR-1.7B 模型](https://huggingface.co/Qwen/Qwen3-ASR-1.7B)
 - [Qwen3-ForcedAligner-0.6B 模型](https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B)

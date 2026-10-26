@@ -301,6 +301,90 @@ test(
     );
   },
 );
+test("recognition language and review downloads preserve original English", async (t) => {
+  const f = await fixture(t),
+    p = await fakeSource(f),
+    sid = p.sources[0].id;
+  await models(f.studio.models);
+  let release, started;
+  const gate = new Promise((resolve) => {
+      release = resolve;
+    }),
+    ready = new Promise((resolve) => {
+      started = resolve;
+    });
+  f.studio.runProcess = async (jid, command, args, folder) => {
+    assert.equal(args.at(-2), "--language");
+    assert.equal(args.at(-1), "English");
+    started();
+    await gate;
+    const out = path.join(folder, "transcription");
+    await fs.mkdir(out);
+    await fs.writeFile(
+      path.join(out, "result.json"),
+      JSON.stringify({
+        duration_seconds: 10,
+        language: "English",
+        review_count: 1,
+        cues: [{ start: 1, end: 3, text: "Please be extra careful." }],
+      }),
+    );
+    await fs.writeFile(
+      path.join(out, "subtitles.srt"),
+      "Please be extra careful.",
+    );
+    await fs.writeFile(
+      path.join(out, "transcript.txt"),
+      "Please be extra careful.",
+    );
+    await fs.writeFile(
+      path.join(out, "review.txt"),
+      "00:00:04,000 – 00:00:06,000: unclear speech",
+    );
+  };
+  const submitted = await f.request(
+    `/api/projects/${p.id}/transcribe`,
+    "POST",
+    { source_id: sid, language: "English" },
+  );
+  assert.equal(submitted.status, 202);
+  await ready;
+  assert.equal(
+    (await fetch(f.url + `/api/jobs/${submitted.body.id}/review`)).status,
+    400,
+  );
+  release();
+  const job = await waitJob(f, submitted.body.id);
+  assert.equal(job.status, "completed", job.message);
+  assert.equal(job.language, "English");
+  assert.equal(job.result.review_count, 1);
+  assert.equal(
+    (await f.studio.getProject(p.id)).subtitles[sid][0].text,
+    "Please be extra careful.",
+  );
+  assert.match(
+    await (await fetch(f.url + job.result.review_url)).text(),
+    /00:00:04,000/,
+  );
+  assert.equal(
+    await (await fetch(f.url + job.result.transcript_url)).text(),
+    "Please be extra careful.",
+  );
+  assert.equal(
+    await (await fetch(f.url + job.result.subtitles_url)).text(),
+    "Please be extra careful.",
+  );
+  assert.equal((await fetch(f.url + `/api/jobs/${job.id}/video`)).status, 400);
+  assert.equal(
+    (
+      await f.request(`/api/projects/${p.id}/transcribe`, "POST", {
+        source_id: sid,
+        language: "unsupported",
+      })
+    ).status,
+    400,
+  );
+});
 test("shutdown terminates owned child processes and releases the project directory", async (t) => {
   const f = await fixture(t),
     p = await fakeSource(f),

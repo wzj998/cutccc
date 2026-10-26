@@ -39,8 +39,12 @@ const definitions = [
   ],
   [
     "transcribe_source",
-    "Queue a Python subtitle inference job; poll get_job.",
-    { project_id: string, source_id: string },
+    "Queue original-language recognition and a review report; language defaults to auto for Chinese/English.",
+    {
+      project_id: string,
+      source_id: string,
+      language: { type: "string", enum: ["auto", "Chinese", "English"] },
+    },
     ["project_id", "source_id"],
   ],
   [
@@ -112,6 +116,7 @@ export async function callTool(base, name, a = {}) {
     case "transcribe_source":
       return apiCall(base, "POST", `/api/projects/${id}/transcribe`, {
         source_id: a.source_id,
+        language: a.language ?? "auto",
       });
     case "export_video":
       return apiCall(base, "POST", `/api/projects/${id}/export`, {
@@ -123,7 +128,12 @@ export async function callTool(base, name, a = {}) {
         "GET",
         `/api/jobs/${encodeURIComponent(a.job_id || "")}`,
       );
-      for (const key of ["video_url", "subtitles_url"])
+      for (const key of [
+        "video_url",
+        "subtitles_url",
+        "review_url",
+        "transcript_url",
+      ])
         if (j.result?.[key]) j.result[key] = base + j.result[key];
       return j;
     }
