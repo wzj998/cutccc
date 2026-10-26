@@ -510,6 +510,7 @@ export class Studio {
         );
         result.video_url = `/api/jobs/${jid}/video`;
         result.subtitles_url = `/api/jobs/${jid}/subtitles`;
+        result.styled_subtitles_url = `/api/jobs/${jid}/styled-subtitles`;
       } else {
         const original = p.sources.find((s) => s.id === sourceId);
         await this.runProcess(
@@ -586,6 +587,7 @@ export class Studio {
       ![
         "video.mp4",
         "subtitles.srt",
+        "subtitles.ass",
         "process.log",
         "review.txt",
         "transcript.txt",
@@ -597,7 +599,7 @@ export class Studio {
       (j.status !== "completed" || !["export", "transcribe"].includes(j.kind))
     )
       throw new APIError("Task is not complete");
-    if (name === "video.mp4" && j.kind !== "export")
+    if (["video.mp4", "subtitles.ass"].includes(name) && j.kind !== "export")
       throw new APIError("This task has no video output");
     if (
       ["review.txt", "transcript.txt"].includes(name) &&

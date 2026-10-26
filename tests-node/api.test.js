@@ -385,6 +385,45 @@ test("recognition language and review downloads preserve original English", asyn
     400,
   );
 });
+test("styled subtitles persist, export to ASS and render at independent positions", {skip: !hasFFmpeg}, async (t) => {
+  const f = await fixture(t);
+  let p = await f.studio.createProject("Subtitle style export");
+  const file = path.join(f.root, "black.mp4");
+  await capture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=black:s=360x640:r=30:d=1.6", "-c:v", "libx264", file]);
+  p = await f.studio.importPath(p.id, file);
+  const sid = p.sources[0].id;
+  const cues = [
+    {start: .1, end: .7, text: "Narration", style: {fontFamily: "Arial", fontSize: 64, color: "#ffff00", position: "top-center"}},
+    {start: .9, end: 1.5, text: "Dialogue", style: {fontFamily: "Arial", fontSize: 64, color: "#ffffff", position: "bottom-center"}},
+  ];
+  const saved = await f.request(`/api/projects/${p.id}`, "PATCH", {revision: p.revision, clips: p.clips, subtitles: {[sid]: cues}});
+  assert.equal(saved.status, 200);
+  p = saved.body;
+  assert.deepEqual((await f.studio.getProject(p.id)).subtitles[sid], cues);
+  const bad = await f.request(`/api/projects/${p.id}`, "PATCH", {revision: p.revision, clips: p.clips, subtitles: {[sid]: [{...cues[0], style: {fontSize: 500}}]}});
+  assert.equal(bad.status, 400);
+  assert.equal((await f.studio.getProject(p.id)).revision, p.revision);
+  const job = await f.studio.submit(p.id, "export");
+  const done = await waitJob(f, job.id);
+  assert.equal(done.status, "completed", done.message);
+  const ass = await fetch(f.url + done.result.styled_subtitles_url);
+  assert.equal(ass.status, 200);
+  assert.match(await ass.text(), /Style: Cue0,Arial/);
+  const video = await f.studio.jobFile(job.id, "video.mp4");
+  for (const [at, top] of [[.3, true], [1.1, false]]) {
+    const pixels = spawnSync("ffmpeg", ["-v", "error", "-ss", String(at), "-i", video, "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], {windowsHide: true, maxBuffer: 2 * 1024 * 1024});
+    assert.equal(pixels.status, 0, pixels.stderr.toString());
+    const ys = [];
+    for (let n = 0; n < pixels.stdout.length; n += 3) {
+      const [r,g,b] = pixels.stdout.subarray(n,n+3);
+      if (top ? r > 140 && g > 140 && b < 100 : r > 170 && g > 170 && b > 170) ys.push(Math.floor(n / 3 / 360));
+    }
+    assert.ok(ys.length > 50, "subtitle glyphs must be present");
+    assert.ok(top ? Math.max(...ys) < 210 : Math.min(...ys) > 420, "each cue must use its own vertical position");
+  }
+  assert.equal((await fetch(f.url + "/static/subtitle-style.js")).status, 200);
+});
+
 test("shutdown terminates owned child processes and releases the project directory", async (t) => {
   const f = await fixture(t),
     p = await fakeSource(f),

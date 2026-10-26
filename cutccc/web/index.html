@@ -85,8 +85,10 @@
           <span id="previewMeta" class="muted">你的故事，从这里开始</span>
           <div class="preview-zoom">
             <label for="previewZoom">缩放</label>
+            <button id="previewZoomOut" class="zoom-step" aria-label="缩小预览" disabled>−</button>
             <input id="previewZoom" type="range" min="25" max="400" step="5" value="100"
               aria-label="预览画面缩放" title="100% 为适应窗口，仅影响预览" disabled />
+            <button id="previewZoomIn" class="zoom-step" aria-label="放大预览" disabled>＋</button>
             <span id="previewZoomValue" class="mono">100%</span>
             <button id="previewFitBtn" class="button secondary small" title="恢复适应窗口并居中" disabled>适应</button>
           </div>
@@ -148,8 +150,10 @@
             <span id="fullscreenClock" class="mono">00:00.00 / 00:00.00</span>
             <div class="preview-zoom fullscreen-zoom">
               <label for="fullscreenZoom">缩放</label>
+              <button id="fullscreenZoomOut" class="zoom-step" aria-label="缩小全屏预览" disabled>−</button>
               <input id="fullscreenZoom" type="range" min="25" max="400" step="5" value="100"
                 aria-label="全屏画面缩放" title="100% 为适应窗口，仅影响预览" disabled />
+              <button id="fullscreenZoomIn" class="zoom-step" aria-label="放大全屏预览" disabled>＋</button>
               <span id="fullscreenZoomValue" class="mono">100%</span>
               <button id="fullscreenFitBtn" class="button secondary small" title="恢复适应窗口并居中" disabled>适应</button>
             </div>
@@ -204,8 +208,8 @@
                 disabled
               >
                 <span aria-hidden="true">⌦</span> <kbd>Del</kbd></button
-              ><label class="zoom-control"
-                >−
+              ><div class="zoom-control">
+                <button id="timelineZoomOut" class="zoom-step" aria-label="缩小时间轴" title="以播放位置为中心缩小">−</button>
                 <input
                   id="zoom"
                   type="range"
@@ -215,8 +219,8 @@
                   title="最小：显示完整时间轴"
                   aria-label="时间线缩放"
                 />
-                ＋</label
-              >
+                <button id="timelineZoomIn" class="zoom-step" aria-label="放大时间轴" title="以播放位置为中心放大">＋</button>
+              </div>
             </div>
           </div>
           <div id="timelineScroll" class="timeline-scroll">
@@ -321,6 +325,37 @@
             ✧ 自动识别人声并生成字幕
           </button>
           <div id="modelHint" class="muted model-hint">正在检查字幕模型…</div>
+          <div class="subtitle-selection-tools">
+            <select id="subtitleScope" aria-label="字幕列表范围">
+              <option value="source">当前素材</option><option value="project">整个工程</option>
+            </select>
+            <button id="selectAllCaptions" class="button small">全选列表</button>
+            <button id="clearCaptionSelection" class="button small">取消选择</button>
+          </div>
+          <details id="captionStyleEditor" class="caption-style-editor">
+            <summary>字幕样式 · <span id="captionSelectionCount">未选择字幕</span></summary>
+            <p class="muted" id="captionStyleHint">勾选字幕可批量编辑；修改一项只影响该项。</p>
+            <fieldset id="captionStyleFields" disabled>
+              <div class="caption-style-grid">
+                <label>字体<select data-caption-style="fontFamily"><option>Microsoft YaHei</option><option>Noto Sans CJK SC</option><option>Arial</option></select></label>
+                <label>字号<input data-caption-style="fontSize" type="number" min="12" max="96" step="1" title="字号随画面尺寸等比缩放" /></label>
+                <label>文字颜色<input data-caption-style="color" type="color" /></label>
+                <label>位置<select data-caption-style="position">
+                  <option value="top-left">上方靠左</option><option value="top-center">上方居中</option><option value="top-right">上方靠右</option>
+                  <option value="middle-left">中部靠左</option><option value="middle-center">正中</option><option value="middle-right">中部靠右</option>
+                  <option value="bottom-left">下方靠左</option><option value="bottom-center">下方居中</option><option value="bottom-right">下方靠右</option>
+                </select></label>
+                <label>描边颜色<input data-caption-style="outlineColor" type="color" /></label>
+                <label>描边宽度<input data-caption-style="outlineWidth" type="number" min="0" max="8" step="0.5" /></label>
+                <label>左右边距 %<input data-caption-style="marginX" type="number" min="0" max="40" step="1" /></label>
+                <label>上下边距 %<input data-caption-style="marginY" type="number" min="0" max="40" step="1" /></label>
+                <label class="style-check"><input data-caption-style="bold" type="checkbox" />粗体</label>
+                <label class="style-check"><input data-caption-style="italic" type="checkbox" />斜体</label>
+              </div>
+              <button id="applyStyleToAll" class="button secondary full">将此样式应用到工程全部字幕</button>
+              <button id="resetCaptionStyle" class="button small full">所选字幕恢复默认样式</button>
+            </fieldset>
+          </details>
           <div class="subtitle-list-heading">
             <span>原素材时间轴</span
             ><button

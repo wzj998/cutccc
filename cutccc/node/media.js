@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { capture } from "./processes.js";
+import { toAss } from "./subtitle-ass.js";
 import {
   APIError,
   clipFrames,
@@ -182,14 +183,13 @@ export async function render(
     );
     audio = "[amixed]";
   }
-  const cues = mapSubtitles(clips, project.subtitles);
+  const cues = mapSubtitles(clips, project.subtitles, voices, project.sources);
   await fs.writeFile(path.join(folder, "subtitles.srt"), toSrt(cues), "utf8");
+  await fs.writeFile(path.join(folder, "subtitles.ass"), toAss(cues, width, height), "utf8");
   let video = "[vcat]";
   if (burnSubtitles && cues.length) {
-    const font =
-      process.platform === "win32" ? "Microsoft YaHei" : "Noto Sans CJK SC";
     filters.push(
-      `[vcat]subtitles=subtitles.srt:force_style='FontName=${font},FontSize=18,MarginV=24,Outline=2,Shadow=0'[vout]`,
+      "[vcat]ass=subtitles.ass[vout]",
     );
     video = "[vout]";
   }

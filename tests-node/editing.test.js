@@ -10,6 +10,40 @@ import {
   validateVoiceovers,
 } from "../cutccc/node/editing.js";
 import { loopbackBase } from "../cutccc/node/mcp.js";
+import { toAss, assText } from "../cutccc/node/subtitle-ass.js";
+import { subtitleLayout } from "../cutccc/web/subtitle-style.js";
+
+test("cue styles survive clipping and reuse while SRT stays plain text", () => {
+  const style = {color: "#ffcc55", position: "top-center", fontSize: 40};
+  const subtitles = {a: [{start: 1, end: 3, text: "Narration", style}]};
+  const clips = [{source_id: "a", start: 2, end: 4}, {source_id: "a", start: 0, end: 2}];
+  validateEdit([{id: "a", duration: 5}], clips, subtitles);
+  const mapped = mapSubtitles(clips, subtitles);
+  assert.deepEqual(mapped.map(c => c.style), [style, style]);
+  mapped[0].style.color = "#ffffff";
+  assert.equal(subtitles.a[0].style.color, "#ffcc55");
+  assert.doesNotMatch(toSrt(mapped), /style|color|ffcc55/);
+  assert.equal(subtitleLayout(style, 1080, 1920).alignment, 8);
+  assert.match(toAss(mapped, 1080, 1920), /PlayResY: 1920/);
+  assert.match(toAss(mapped, 1080, 1920), /\\pos\(540\.000,153\.600\)/);
+  assert.match(assText("literal {\\b1}\nnext"), /\\\{/);
+  assert.ok(assText("\\N").includes("\u2060"));
+});
+
+test("invalid style fields are rejected before project persistence", () => {
+  for (const style of [null, [], {fontSize: NaN}, {fontSize: 0}, {fontFamily: "A,\\N"},
+    {color: "red"}, {position: "outside"}, {bold: 1}, {marginX: 41}, {outlineWidth: -1}, {unknown: true}])
+    assert.throws(() => validateEdit([{id: "a", duration: 5}], [], {a: [{start: 0, end: 1, text: "x", style}]}));
+});
+
+test("voiceover captions use output placement and retain their independent style", () => {
+  const style = {position: "top-center", color: "#ffcc55"};
+  const cues = mapSubtitles([{source_id: "scene", start: 20, end: 30}], {
+    scene: [{start: 23, end: 25, text: "dialogue"}],
+    voice: [{start: 0, end: 2, text: "narration", style}],
+  }, [{source_id: "voice", start: 3.5}], [{id: "voice", duration: 2}]);
+  assert.deepEqual(cues, [{start: 3, end: 5, text: "dialogue"}, {start: 3.5, end: 5.5, text: "narration", style}]);
+});
 
 test("existing source-clock subtitles survive reordering, reuse and clipping", () => {
   const sources = [

@@ -68,7 +68,7 @@ function editBody(b) {
   for (const cues of Object.values(b.subtitles)) {
     if (!Array.isArray(cues)) fail("Subtitle cues must be arrays", 422);
     for (const c of cues)
-      object(c, ["start", "end", "text"], ["start", "end", "text"]);
+      object(c, ["start", "end", "text", "style"], ["start", "end", "text"]);
   }
   if (b.voiceovers !== undefined && b.voiceovers !== null) {
     if (!Array.isArray(b.voiceovers)) fail("voiceovers must be an array", 422);
@@ -88,6 +88,7 @@ async function sendFile(req, res, file, { name } = {}) {
     ".png": "image/png",
     ".mp4": "video/mp4",
     ".srt": "text/plain; charset=utf-8",
+    ".ass": "text/plain; charset=utf-8",
     ".log": "text/plain; charset=utf-8",
     ".txt": "text/plain; charset=utf-8",
   };
@@ -241,6 +242,7 @@ const ROUTES = [
   ["get", "/api/jobs/{id}", "读取任务"],
   ["get", "/api/jobs/{id}/video", "下载MP4"],
   ["get", "/api/jobs/{id}/subtitles", "下载SRT"],
+  ["get", "/api/jobs/{id}/styled-subtitles", "下载带逐条样式的ASS字幕"],
   ["get", "/api/jobs/{id}/log", "任务日志"],
   ["get", "/api/jobs/{id}/review", "未识别及待复核区间（原素材时间）"],
   ["get", "/api/jobs/{id}/transcript", "下载原文转写"],
@@ -266,7 +268,18 @@ export function openapi() {
       "start",
       "end",
     ]),
-    Subtitle: schema({ start: number, end: number, text: str }, [
+    SubtitleStyle: schema({
+      fontFamily: {type: "string", enum: ["Microsoft YaHei", "Noto Sans CJK SC", "Arial"]},
+      fontSize: {type: "number", minimum: 12, maximum: 96},
+      color: {type: "string", pattern: "^#[0-9a-fA-F]{6}$"},
+      bold: {type: "boolean"}, italic: {type: "boolean"},
+      outlineColor: {type: "string", pattern: "^#[0-9a-fA-F]{6}$"},
+      outlineWidth: {type: "number", minimum: 0, maximum: 8},
+      position: {type: "string", enum: ["top-left", "top-center", "top-right", "middle-left", "middle-center", "middle-right", "bottom-left", "bottom-center", "bottom-right"]},
+      marginX: {type: "number", minimum: 0, maximum: 40},
+      marginY: {type: "number", minimum: 0, maximum: 40},
+    }, []),
+    Subtitle: schema({ start: number, end: number, text: str, style: ref("SubtitleStyle") }, [
       "start",
       "end",
       "text",
@@ -408,6 +421,7 @@ export async function startServer(options = {}) {
             "index.html",
             "api.html",
             "app.js",
+            "subtitle-style.js",
             "style.css",
             "api-docs.js",
           ].includes(name)
@@ -516,7 +530,7 @@ export async function startServer(options = {}) {
         }
       }
       m =
-        /^\/api\/jobs\/([^/]+)(?:\/(video|subtitles|log|review|transcript))?$/.exec(
+        /^\/api\/jobs\/([^/]+)(?:\/(video|subtitles|styled-subtitles|log|review|transcript))?$/.exec(
           route,
         );
       if (m && (method === "GET" || method === "HEAD")) {
@@ -527,6 +541,7 @@ export async function startServer(options = {}) {
         const names = {
           video: ["video.mp4", "cutccc-export.mp4"],
           subtitles: ["subtitles.srt", "subtitles.srt"],
+          "styled-subtitles": ["subtitles.ass", "subtitles.ass"],
           log: ["process.log", null],
           review: ["review.txt", "recognition-review.txt"],
           transcript: ["transcript.txt", "transcript.txt"],

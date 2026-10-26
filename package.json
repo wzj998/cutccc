@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node cutccc/node/cli.js serve",
     "test": "node --test tests-node/*.test.js",
-    "check": "node --check cutccc/web/app.js && node --check cutccc/web/api-docs.js"
+    "check": "node --check cutccc/web/app.js && node --check cutccc/web/api-docs.js && node --check cutccc/web/subtitle-style.js"
   },
   "engines": {
     "node": ">=22"

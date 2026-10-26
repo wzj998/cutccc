@@ -131,6 +131,7 @@ export async function callTool(base, name, a = {}) {
       for (const key of [
         "video_url",
         "subtitles_url",
+        "styled_subtitles_url",
         "review_url",
         "transcript_url",
       ])

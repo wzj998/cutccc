@@ -1,5 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
+let subtitleStyle;
+const subtitleStyleReady = import("/static/subtitle-style.js").then(module => { subtitleStyle = module; });
 const state = {
   project: null,
   source: null,
@@ -22,6 +24,9 @@ const state = {
   outputEndSelected: false,
   fullscreenPointerNearBottom: false,
   timelineScrub: null,
+  subtitleSelection: new Set(),
+  subtitleSelectionProject: null,
+  captionRenderKey: null,
 };
 const esc = (value) =>
   String(value ?? "").replace(
@@ -109,6 +114,7 @@ function updateButtons() {
   $("fullscreenBtn").disabled = !src || !document.fullscreenEnabled;
   for (const id of ["previewZoom", "fullscreenZoom", "previewFitBtn", "fullscreenFitBtn"])
     $(id).disabled = !src;
+  updatePreviewZoomButtons();
   $("fullscreenSeek").disabled = !state.project?.clips.length;
   $("fullscreenSeek").max = total();
   for (const id of [
@@ -270,7 +276,14 @@ function setPreviewZoom(percent) {
   }
   for (const id of ["previewZoomValue", "fullscreenZoomValue"])
     $(id).textContent = `${zoom}%`;
+  updatePreviewZoomButtons();
   fitPreview();
+}
+function updatePreviewZoomButtons() {
+  for (const prefix of ["preview", "fullscreen"]) {
+    $(prefix + "ZoomOut").disabled = !source() || state.previewZoom <= .25;
+    $(prefix + "ZoomIn").disabled = !source() || state.previewZoom >= 4;
+  }
 }
 function fitPreview() {
   const s = source();
@@ -411,13 +424,22 @@ function mappedCues() {
     }
     offset += d;
   }
-  return result;
+  for (const voice of state.project?.voiceovers || []) {
+    const s = state.project.sources.find(s => s.id === voice.source_id);
+    for (const cue of state.project.subtitles[voice.source_id] || []) {
+      const start = Math.max(0, cue.start), end = Math.min(cue.end, s.duration, offset - voice.start);
+      if (end > start) result.push({start: voice.start + start, end: voice.start + end, text: cue.text});
+    }
+  }
+  return result.sort((a, b) => a.start - b.start);
 }
 function renderTimeline() {
   const p = state.project;
   const scroll = $("timelineScroll");
   const previousZoom = state.zoom;
   const previousTime = scroll.scrollLeft / previousZoom;
+  const playheadTime = Number($("fullscreenSeek").value) || 0;
+  const playheadX = playheadTime * previousZoom - scroll.scrollLeft;
   const seconds = total();
   $("clipCount").textContent = `${p?.clips.length || 0} 段`;
   $("totalClock").textContent = time(seconds);
@@ -425,6 +447,8 @@ function renderTimeline() {
   const fitScale = seconds > 0 ? viewportWidth / seconds : 24;
   const maxScale = Math.max(90, fitScale * 4);
   const zoom = Number($("zoom").value) / 100;
+  $("timelineZoomOut").disabled = !p?.clips.length || zoom <= 0;
+  $("timelineZoomIn").disabled = !p?.clips.length || zoom >= 1;
   state.zoom = fitScale * Math.pow(maxScale / fitScale, zoom);
   const width = Math.max(seconds * state.zoom, viewportWidth);
   $("timelineCanvas").style.width = `${width}px`;
@@ -459,19 +483,101 @@ function renderTimeline() {
     )
     .join("");
   $("playhead").hidden = !p?.clips.length;
-  scroll.scrollLeft = zoom === 0 ? 0 : previousTime * state.zoom;
+  const anchor = playheadX >= 0 && playheadX <= viewportWidth ? playheadX : viewportWidth / 2;
+  scroll.scrollLeft = zoom === 0 ? 0 : Math.abs(previousZoom - state.zoom) > .000001
+    ? playheadTime * state.zoom - anchor : previousTime * state.zoom;
 }
 function renderSubtitles() {
-  const cues = state.project?.subtitles[state.source] || [];
-  $("subtitleCount").textContent = cues.length;
-  $("subtitleList").innerHTML = cues.length
-    ? cues
+  const entries = subtitleEntries();
+  if (state.subtitleSelectionProject !== state.project?.id) {
+    state.subtitleSelection.clear();
+    state.subtitleSelectionProject = state.project?.id;
+  }
+  const valid = new Set(subtitleEntries(true).map(entry => entry.key));
+  for (const key of state.subtitleSelection) if (!valid.has(key)) state.subtitleSelection.delete(key);
+  $("subtitleCount").textContent = entries.length;
+  $("subtitleList").innerHTML = entries.length
+    ? entries
         .map(
-          (c, i) =>
-            `<div class="subtitle-row" data-cue="${i}"><div class="subtitle-time"><span class="number">${String(i + 1).padStart(2, "0")}</span><input type="number" min="0" step="0.001" data-field="start" aria-label="字幕 ${i + 1} 开始时间" value="${c.start.toFixed(3)}"><span class="separator">—</span><input type="number" min="0" step="0.001" data-field="end" aria-label="字幕 ${i + 1} 结束时间" value="${c.end.toFixed(3)}"><button class="icon-button" data-remove-cue="${i}" title="删除字幕" aria-label="删除字幕 ${i + 1}">×</button></div><textarea data-field="text" aria-label="字幕 ${i + 1} 文字">${esc(c.text)}</textarea></div>`,
+          ({cue: c, index: i, sourceId, key, name}) =>
+            `<div class="subtitle-row ${state.subtitleSelection.has(key) ? "selected" : ""}" data-cue="${i}" data-cue-source="${sourceId}"><div class="subtitle-select-line"><input type="checkbox" data-select-cue="${key}" aria-label="选择字幕 ${i + 1}" ${state.subtitleSelection.has(key) ? "checked" : ""}><span title="${esc(name)}">${esc(name)}</span><button class="button small" data-edit-style="${key}">样式</button></div><div class="subtitle-time"><span class="number">${String(i + 1).padStart(2, "0")}</span><input type="number" min="0" step="0.001" data-field="start" aria-label="字幕 ${i + 1} 开始时间" value="${c.start.toFixed(3)}"><span class="separator">—</span><input type="number" min="0" step="0.001" data-field="end" aria-label="字幕 ${i + 1} 结束时间" value="${c.end.toFixed(3)}"><button class="icon-button" data-remove-cue="${i}" title="删除字幕" aria-label="删除字幕 ${i + 1}">×</button></div><textarea data-field="text" aria-label="字幕 ${i + 1} 文字">${esc(c.text)}</textarea></div>`,
         )
         .join("")
     : '<p class="muted" style="margin-top:18px">生成字幕后，可以在这里逐条校对文字和时间，也可以点击 ＋ 手动添加。</p>';
+  renderCaptionStyleEditor();
+}
+function subtitleEntries(all = false) {
+  return (state.project?.sources || []).flatMap(s =>
+    all || $("subtitleScope").value === "project" || s.id === state.source
+      ? (state.project.subtitles[s.id] || []).map((cue, index) => ({cue, index, sourceId: s.id, name: s.name, key: `${s.id}:${index}`})) : []);
+}
+function selectedSubtitleEntries() {
+  return subtitleEntries(true).filter(entry => state.subtitleSelection.has(entry.key));
+}
+function previewSubtitle(sourceId, index) {
+  const cue = state.project.subtitles[sourceId][index];
+  const voice = (state.project.voiceovers || []).find(v => v.source_id === sourceId);
+  const at = cue.start + Math.min(.05, (cue.end - cue.start) / 2);
+  pause();
+  if (voice) { seekOutput(voice.start + at, false); return; }
+  const clipIndex = state.project.clips.findIndex(c => c.source_id === sourceId && c.start < cue.end && c.end > cue.start);
+  if (clipIndex >= 0) selectClip(clipIndex, Math.max(at, state.project.clips[clipIndex].start));
+  else { state.source = sourceId; state.clip = -1; render(); setPreview(at); }
+}
+function renderCaptionStyleEditor() {
+  const entries = selectedSubtitleEntries();
+  $("captionSelectionCount").textContent = entries.length ? `已选 ${entries.length} 条` : "未选择字幕";
+  $("captionStyleFields").disabled = !entries.length;
+  if (!entries.length || !subtitleStyle) return;
+  const styles = entries.map(entry => subtitleStyle.resolvedStyle(entry.cue.style));
+  let mixed = false;
+  for (const input of document.querySelectorAll("[data-caption-style]")) {
+    const key = input.dataset.captionStyle, value = styles[0][key];
+    const different = styles.some(s => s[key] !== value);
+    mixed ||= different;
+    if (input.type === "checkbox") { input.checked = value; input.indeterminate = different; }
+    else input.value = different && input.type === "number" ? "" : value;
+    input.title = different ? "所选字幕的此项不同；修改后统一此项" : "";
+  }
+  $("captionStyleHint").textContent = mixed
+    ? "所选样式有差异；修改一项只统一该项。应用到全部时使用第一条所选字幕的完整样式。"
+    : "修改会立即应用到所选字幕。字号随画面尺寸等比缩放。";
+}
+function updateCaptionStyleField(event) {
+  const input = event.target, key = input.dataset.captionStyle;
+  if (!key) return;
+  const value = input.type === "checkbox" ? input.checked : input.type === "number" ? Number(input.value) : input.value;
+  if (input.type === "number" && (!input.value || !input.checkValidity())) return;
+  const entries = selectedSubtitleEntries();
+  if (!entries.length) return;
+  try { subtitleStyle.validateStyle({[key]: value}); } catch (error) { toast(error.message, true); return; }
+  for (const {cue} of entries) cue.style = {...cue.style, [key]: value};
+  input.indeterminate = false;
+  markDirty();
+  state.captionRenderKey = null;
+  renderCaptionStyleEditor();
+}
+function renderCaptionPreview(cues) {
+  const frame = $("videoFrame"), overlay = $("captionOverlay");
+  const width = frame.clientWidth, height = frame.clientHeight;
+  const key = JSON.stringify([cues, width, height, $("showCaptions").checked]);
+  if (key === state.captionRenderKey) return;
+  state.captionRenderKey = key;
+  overlay.replaceChildren();
+  if (!$("showCaptions").checked || !subtitleStyle) return;
+  for (const cue of cues) {
+  const s = subtitleStyle.subtitleLayout(cue.style, width, height);
+  const text = document.createElement("span");
+  text.className = "caption-text";
+  text.textContent = cue.text;
+  Object.assign(text.style, {
+    left: `${s.x}px`, top: `${s.y}px`, transform: `translate(${-100 * s.anchorX}%, ${-100 * s.anchorY}%)`,
+    maxWidth: `${s.maxWidth}px`, fontFamily: `"${s.fontFamily}", sans-serif`, fontSize: `${s.fontPixels}px`,
+    fontWeight: s.bold ? "700" : "400", fontStyle: s.italic ? "italic" : "normal", color: s.color,
+    textAlign: s.textAlign, webkitTextStroke: `${s.outlinePixels * 2}px ${s.outlineColor}`,
+  });
+  overlay.append(text);
+  }
 }
 function recognitionLinks(job) {
   if (job.status !== "completed" || job.kind !== "transcribe" || !job.result)
@@ -509,6 +615,16 @@ function renderJobs() {
         )
         .join("")
     : '<p class="muted">导出的视频会出现在这里。</p>';
+  for (const job of state.jobs) {
+    if (!job.result?.styled_subtitles_url) continue;
+    const videoLink = [...$("jobList").querySelectorAll("a")].find(a => a.getAttribute("href") === job.result.video_url);
+    if (!videoLink) continue;
+    const link = document.createElement("a");
+    link.href = job.result.styled_subtitles_url;
+    link.download = "subtitles.ass";
+    link.textContent = "样式字幕 ASS ↓";
+    videoLink.parentElement.append(link);
+  }
 }
 
 function setPlaying(playing) {
@@ -716,11 +832,14 @@ function tick() {
   $("playheadHandle").setAttribute("aria-valuemax", total());
   $("playheadHandle").setAttribute("aria-valuenow", offset);
   $("playheadHandle").setAttribute("aria-valuetext", time(offset));
-  const cue = (state.project?.subtitles[state.source] || []).find(
+  const cues = (state.project?.subtitles[state.source] || []).filter(
     (c) => current >= c.start && current < c.end,
   );
-  $("captionOverlay").textContent =
-    $("showCaptions").checked && cue ? cue.text : "";
+  if (c) for (const voice of state.project.voiceovers || []) {
+    const at = offset - voice.start;
+    cues.push(...(state.project.subtitles[voice.source_id] || []).filter(cue => cue.start <= at && at < cue.end));
+  }
+  renderCaptionPreview(cues);
   requestAnimationFrame(tick);
 }
 function updateRange(start, end) {
@@ -970,6 +1089,10 @@ for (const id of ["previewZoom", "fullscreenZoom"])
   $(id).oninput = (event) => setPreviewZoom(event.target.value);
 for (const id of ["previewFitBtn", "fullscreenFitBtn"])
   $(id).onclick = resetPreviewView;
+for (const prefix of ["preview", "fullscreen"]) {
+  $(prefix + "ZoomOut").onclick = () => setPreviewZoom(Math.round(state.previewZoom * 100) - 5);
+  $(prefix + "ZoomIn").onclick = () => setPreviewZoom(Math.round(state.previewZoom * 100) + 5);
+}
 $("videoFrame").addEventListener("pointerdown", startPreviewPan);
 $("videoFrame").addEventListener("lostpointercapture", finishPreviewPan);
 $("videoFrame").ondragstart = (event) => event.preventDefault();
@@ -994,6 +1117,11 @@ $("video").onerror = () => {
   toast("浏览器无法预览当前编码。可以继续设置剪辑范围并导出兼容的 MP4。", true);
 };
 $("zoom").oninput = () => renderTimeline();
+for (const [id, delta] of [["timelineZoomOut", -5], ["timelineZoomIn", 5]])
+  $(id).onclick = () => {
+    $("zoom").value = Math.max(0, Math.min(100, Number($("zoom").value) + delta));
+    renderTimeline();
+  };
 $("splitBtn").onclick = splitClip;
 $("removeClipBtn").onclick = removeClip;
 $("trimStart").onchange = () =>
@@ -1050,28 +1178,70 @@ $("subtitleList").oninput = (e) => {
   const row = e.target.closest("[data-cue]"),
     field = e.target.dataset.field;
   if (!row || !field) return;
-  const cue = state.project.subtitles[state.source][Number(row.dataset.cue)];
+  const cue = state.project.subtitles[row.dataset.cueSource][Number(row.dataset.cue)];
   cue[field] = field === "text" ? e.target.value : Number(e.target.value);
   markDirty();
   renderTimeline();
 };
 $("subtitleList").onclick = (e) => {
+  const styleButton = e.target.closest("[data-edit-style]");
+  if (styleButton) {
+    state.subtitleSelection = new Set([styleButton.dataset.editStyle]);
+    const entry = selectedSubtitleEntries()[0];
+    previewSubtitle(entry.sourceId, entry.index);
+    renderSubtitles();
+    $("captionStyleEditor").open = true;
+    $("captionStyleEditor").scrollIntoView({block: "nearest"});
+    return;
+  }
   const button = e.target.closest("[data-remove-cue]");
   if (button) {
-    state.project.subtitles[state.source].splice(
+    const row = button.closest("[data-cue]");
+    state.project.subtitles[row.dataset.cueSource].splice(
       Number(button.dataset.removeCue),
       1,
     );
+    state.subtitleSelection.clear();
     markDirty();
     renderSubtitles();
     renderTimeline();
   } else if (e.target.classList.contains("number")) {
     const row = e.target.closest("[data-cue]");
-    pause();
-    setPreview(
-      state.project.subtitles[state.source][Number(row.dataset.cue)].start,
-    );
+    previewSubtitle(row.dataset.cueSource, Number(row.dataset.cue));
   }
+};
+$("subtitleList").onchange = (event) => {
+  const key = event.target.dataset.selectCue;
+  if (!key) return;
+  if (event.target.checked) state.subtitleSelection.add(key);
+  else state.subtitleSelection.delete(key);
+  event.target.closest("[data-cue]").classList.toggle("selected", event.target.checked);
+  renderCaptionStyleEditor();
+};
+$("subtitleScope").onchange = renderSubtitles;
+$("selectAllCaptions").onclick = () => {
+  for (const entry of subtitleEntries()) state.subtitleSelection.add(entry.key);
+  renderSubtitles();
+  $("captionStyleEditor").open = true;
+};
+$("clearCaptionSelection").onclick = () => { state.subtitleSelection.clear(); renderSubtitles(); };
+$("captionStyleFields").oninput = updateCaptionStyleField;
+$("applyStyleToAll").onclick = () => {
+  const first = selectedSubtitleEntries()[0];
+  if (!first) return;
+  const style = subtitleStyle.resolvedStyle(first.cue.style);
+  const entries = subtitleEntries(true);
+  for (const {cue} of entries) cue.style = {...style};
+  markDirty();
+  renderCaptionStyleEditor();
+  toast(`已将样式应用到工程全部 ${entries.length} 条字幕。`);
+};
+$("resetCaptionStyle").onclick = () => {
+  const entries = selectedSubtitleEntries();
+  if (!entries.length) return;
+  for (const {cue} of entries) delete cue.style;
+  markDirty();
+  renderCaptionStyleEditor();
 };
 $("addCaptionBtn").onclick = () => {
   const s = source();
@@ -1087,6 +1257,7 @@ $("addCaptionBtn").onclick = () => {
   }
   cues.push({ start, end, text: "新字幕" });
   cues.sort((a, b) => a.start - b.start);
+  state.subtitleSelection.clear();
   markDirty();
   renderSubtitles();
   renderTimeline();
@@ -1228,6 +1399,7 @@ async function health() {
 }
 (async () => {
   try {
+    await subtitleStyleReady;
     await health();
     await projectOptions();
     const id = localStorage.getItem("cutccc-project");

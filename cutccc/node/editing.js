@@ -1,3 +1,4 @@
+import { validateStyle } from "../web/subtitle-style.js";
 export const FPS = 30;
 export class APIError extends Error {
   constructor(message, status = 400) {
@@ -74,6 +75,7 @@ export function validateEdit(sources, clips, subtitles) {
       )
         fail("Subtitle text must contain 1–1000 characters");
       previous = c.end;
+      try { validateStyle(c.style); } catch (error) { fail(error.message); }
     }
   }
 }
@@ -93,7 +95,7 @@ export function validateVoiceovers(sources, clips, voices) {
   }
 }
 const millis = (n) => roundEven(n * 1000) / 1000;
-export function mapSubtitles(clips, subtitles) {
+export function mapSubtitles(clips, subtitles, voiceovers = [], sources = []) {
   let offset = 0;
   const cues = [];
   for (const clip of clips) {
@@ -106,11 +108,23 @@ export function mapSubtitles(clips, subtitles) {
           start: millis(offset + start - clip.start),
           end: millis(offset + end - clip.start),
           text: c.text,
+          ...(c.style === undefined ? {} : { style: structuredClone(c.style) }),
         });
     }
     offset += duration;
   }
-  return cues;
+  for (const voice of voiceovers) {
+    const source = sources.find(s => s.id === voice.source_id);
+    if (!source) continue;
+    for (const cue of subtitles[voice.source_id] || []) {
+      const start = Math.max(0, cue.start), end = Math.min(cue.end, source.duration, offset - voice.start);
+      if (end - start >= .001) cues.push({
+        start: millis(voice.start + start), end: millis(voice.start + end), text: cue.text,
+        ...(cue.style === undefined ? {} : {style: structuredClone(cue.style)}),
+      });
+    }
+  }
+  return cues.sort((a, b) => a.start - b.start);
 }
 export function timestamp(seconds) {
   if (!finite(seconds) || seconds < 0)
