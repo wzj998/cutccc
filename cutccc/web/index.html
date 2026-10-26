@@ -333,7 +333,10 @@
             <button id="clearCaptionSelection" class="button small">取消选择</button>
           </div>
           <details id="captionStyleEditor" class="caption-style-editor">
-            <summary>字幕样式 · <span id="captionSelectionCount">未选择字幕</span></summary>
+            <summary>字幕编辑 · <span id="captionSelectionCount">未选择字幕</span></summary>
+            <label id="captionFocusedContent" class="caption-focused-content" hidden>
+              字幕内容<textarea id="captionFocusedText" rows="2" aria-label="当前选中的字幕内容"></textarea>
+            </label>
             <p class="muted" id="captionStyleHint">勾选字幕可批量编辑；修改一项只影响该项。</p>
             <fieldset id="captionStyleFields" disabled>
               <div class="caption-style-grid">

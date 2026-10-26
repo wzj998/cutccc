@@ -554,6 +554,8 @@ kbd {
 .subtitle-selection-tools select { width: 100%; padding: 6px; }
 .caption-style-editor { border: 1px solid var(--line); border-radius: 6px; margin: 12px 0; padding: 9px; }
 .caption-style-editor summary { cursor: pointer; font-size: 11px; }
+.caption-focused-content { display: block; margin-top: 10px; font-size: 10px; color: var(--muted); }
+.caption-focused-content textarea { display: block; width: 100%; margin-top: 5px; resize: vertical; min-height: 58px; }
 .caption-style-editor p { font-size: 10px; margin: 9px 0; }
 .caption-style-editor fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .caption-style-editor fieldset:disabled { opacity: .4; }
@@ -610,7 +612,7 @@ kbd {
   vertical-align: middle;
 }
 .timeline-panel {
-  height: 240px;
+  height: calc(240px + var(--caption-extra-height, 0px));
   flex-shrink: 0;
   background: #171b1d;
   border-top: 1px solid var(--line);
@@ -653,7 +655,7 @@ kbd {
   padding: 0;
 }
 .timeline-scroll {
-  height: 145px;
+  height: calc(145px + var(--caption-extra-height, 0px));
   overflow-x: auto;
   overflow-y: hidden;
   margin-left: 22px;
@@ -663,7 +665,7 @@ kbd {
 .timeline-canvas {
   position: relative;
   min-width: 100%;
-  height: 135px;
+  height: calc(135px + var(--caption-extra-height, 0px));
 }
 .ruler {
   height: 26px;
@@ -769,14 +771,16 @@ kbd {
   padding-top: 24px;
 }
 .caption-track {
-  height: 29px;
+  height: calc(29px + var(--caption-extra-height, 0px));
   margin-top: 7px;
   position: relative;
   background: #131819;
   border-radius: 4px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .caption-block {
+  cursor: pointer;
   position: absolute;
   height: 22px;
   top: 3px;
@@ -791,6 +795,8 @@ kbd {
   padding: 4px;
   min-width: 2px;
 }
+.caption-block:hover, .caption-block:focus-visible { background: #52566d; outline: 1px solid #c4c2ee; outline-offset: -1px; }
+.caption-block.selected { background: #365744; border-left-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .playhead {
   position: absolute;
   left: 0;
@@ -1178,10 +1184,10 @@ dialog p {
     grid-template-columns: 270px minmax(600px, 1fr) 340px;
   }
   .timeline-panel {
-    height: 265px;
+    height: calc(265px + var(--caption-extra-height, 0px));
   }
   .timeline-scroll {
-    height: 170px;
+    height: calc(170px + var(--caption-extra-height, 0px));
   }
   .welcome {
     max-width: 520px;
@@ -1294,10 +1300,10 @@ dialog p {
     display: none;
   }
   .timeline-panel {
-    height: 210px;
+    height: calc(210px + var(--caption-extra-height, 0px));
   }
   .timeline-scroll {
-    height: 120px;
+    height: calc(145px + var(--caption-extra-height, 0px));
   }
   .timeline-footer {
     display: none;

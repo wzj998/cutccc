@@ -410,9 +410,9 @@ function renderVoiceovers() {
 function mappedCues() {
   let offset = 0,
     result = [];
-  for (const c of state.project?.clips || []) {
+  for (const [clipIndex, c] of (state.project?.clips || []).entries()) {
     const d = duration(c);
-    for (const cue of state.project.subtitles[c.source_id] || []) {
+    for (const [index, cue] of (state.project.subtitles[c.source_id] || []).entries()) {
       const a = Math.max(c.start, cue.start),
         b = Math.min(c.end, cue.end, c.start + d);
       if (b > a)
@@ -420,15 +420,17 @@ function mappedCues() {
           start: offset + a - c.start,
           end: offset + b - c.start,
           text: cue.text,
+          sourceId: c.source_id, index, occurrence: `clip:${clipIndex}:${index}`,
         });
     }
     offset += d;
   }
-  for (const voice of state.project?.voiceovers || []) {
+  for (const [voiceIndex, voice] of (state.project?.voiceovers || []).entries()) {
     const s = state.project.sources.find(s => s.id === voice.source_id);
-    for (const cue of state.project.subtitles[voice.source_id] || []) {
+    for (const [index, cue] of (state.project.subtitles[voice.source_id] || []).entries()) {
       const start = Math.max(0, cue.start), end = Math.min(cue.end, s.duration, offset - voice.start);
-      if (end > start) result.push({start: voice.start + start, end: voice.start + end, text: cue.text});
+      if (end > start) result.push({start: voice.start + start, end: voice.start + end, text: cue.text,
+        sourceId: voice.source_id, index, occurrence: `voice:${voiceIndex}:${index}`});
     }
   }
   return result.sort((a, b) => a.start - b.start);
@@ -476,12 +478,22 @@ function renderTimeline() {
         })
         .join("")
     : '<div class="timeline-placeholder">导入视频后，片段将出现在这里</div>';
+  const lanes = [];
   $("captionTrack").innerHTML = mappedCues()
-    .map(
-      (c) =>
-        `<div class="caption-block" style="left:${c.start * state.zoom}px;width:${(c.end - c.start) * state.zoom}px" title="${esc(c.text)}">${esc(c.text)}</div>`,
-    )
+    .map((c) => {
+      let lane = lanes.findIndex(end => end <= c.start);
+      if (lane < 0) lane = lanes.length;
+      lanes[lane] = c.end;
+      const selected = state.subtitleSelection.has(`${c.sourceId}:${c.index}`);
+      return `<div class="caption-block ${selected ? "selected" : ""}" data-caption-occurrence="${c.occurrence}" data-caption-key="${c.sourceId}:${c.index}" role="button" tabindex="0" aria-pressed="${selected}" aria-label="编辑字幕：${esc(c.text)}" style="left:${c.start * state.zoom}px;width:${(c.end - c.start) * state.zoom}px;top:${3 + lane * 26}px" title="点击编辑内容和样式：${esc(c.text)}">${esc(c.text)}</div>`;
+    })
     .join("");
+  const panel = scroll.closest(".timeline-panel");
+  const extraHeight = `${Math.min(2, Math.max(0, lanes.length - 1)) * 26}px`;
+  if (panel.style.getPropertyValue("--caption-extra-height") !== extraHeight) {
+    panel.style.setProperty("--caption-extra-height", extraHeight);
+    requestAnimationFrame(fitPreview);
+  }
   $("playhead").hidden = !p?.clips.length;
   const anchor = playheadX >= 0 && playheadX <= viewportWidth ? playheadX : viewportWidth / 2;
   scroll.scrollLeft = zoom === 0 ? 0 : Math.abs(previousZoom - state.zoom) > .000001
@@ -514,6 +526,21 @@ function subtitleEntries(all = false) {
 function selectedSubtitleEntries() {
   return subtitleEntries(true).filter(entry => state.subtitleSelection.has(entry.key));
 }
+function openTimelineCaption(occurrence) {
+  const mapped = mappedCues().find(cue => cue.occurrence === occurrence);
+  if (!mapped) return;
+  state.subtitleSelectionProject = state.project.id;
+  state.subtitleSelection = new Set([`${mapped.sourceId}:${mapped.index}`]);
+  // Seek the clicked occurrence, including reused clips and repeated voiceovers.
+  seekOutput(mapped.start + Math.min(.05, (mapped.end - mapped.start) / 2), false);
+  if (mapped.sourceId !== state.source) $("subtitleScope").value = "project";
+  document.querySelector('[data-tab="subtitles"]').click();
+  renderSubtitles();
+  renderTimeline();
+  $("captionStyleEditor").open = true;
+  $("captionStyleEditor").scrollIntoView({block: "nearest"});
+  $("captionFocusedText").focus({preventScroll: true});
+}
 function previewSubtitle(sourceId, index) {
   const cue = state.project.subtitles[sourceId][index];
   const voice = (state.project.voiceovers || []).find(v => v.source_id === sourceId);
@@ -526,8 +553,16 @@ function previewSubtitle(sourceId, index) {
 }
 function renderCaptionStyleEditor() {
   const entries = selectedSubtitleEntries();
+  for (const block of $("captionTrack").querySelectorAll("[data-caption-key]")) {
+    const selected = state.subtitleSelection.has(block.dataset.captionKey);
+    block.classList.toggle("selected", selected);
+    block.setAttribute("aria-pressed", String(selected));
+  }
   $("captionSelectionCount").textContent = entries.length ? `已选 ${entries.length} 条` : "未选择字幕";
   $("captionStyleFields").disabled = !entries.length;
+  $("captionFocusedContent").hidden = entries.length !== 1;
+  if (entries.length === 1 && $("captionFocusedText").value !== entries[0].cue.text)
+    $("captionFocusedText").value = entries[0].cue.text;
   if (!entries.length || !subtitleStyle) return;
   const styles = entries.map(entry => subtitleStyle.resolvedStyle(entry.cue.style));
   let mixed = false;
@@ -1180,6 +1215,7 @@ $("subtitleList").oninput = (e) => {
   if (!row || !field) return;
   const cue = state.project.subtitles[row.dataset.cueSource][Number(row.dataset.cue)];
   cue[field] = field === "text" ? e.target.value : Number(e.target.value);
+  if (field === "text") renderCaptionStyleEditor();
   markDirty();
   renderTimeline();
 };
@@ -1219,6 +1255,30 @@ $("subtitleList").onchange = (event) => {
   renderCaptionStyleEditor();
 };
 $("subtitleScope").onchange = renderSubtitles;
+$("captionTrack").onclick = (event) => {
+  const block = event.target.closest("[data-caption-occurrence]");
+  if (block) openTimelineCaption(block.dataset.captionOccurrence);
+};
+$("captionTrack").onkeydown = (event) => {
+  if (event.key !== "Enter" && event.code !== "Space") return;
+  const block = event.target.closest("[data-caption-occurrence]");
+  if (!block) return;
+  event.preventDefault();
+  event.stopPropagation();
+  openTimelineCaption(block.dataset.captionOccurrence);
+};
+$("captionFocusedText").oninput = (event) => {
+  const entries = selectedSubtitleEntries();
+  if (entries.length !== 1) return;
+  const entry = entries[0];
+  entry.cue.text = event.target.value;
+  const row = [...$("subtitleList").querySelectorAll("[data-cue]")].find(
+    row => row.dataset.cueSource === entry.sourceId && Number(row.dataset.cue) === entry.index,
+  );
+  if (row) row.querySelector("textarea").value = entry.cue.text;
+  markDirty();
+  renderTimeline();
+};
 $("selectAllCaptions").onclick = () => {
   for (const entry of subtitleEntries()) state.subtitleSelection.add(entry.key);
   renderSubtitles();
