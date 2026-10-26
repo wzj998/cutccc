@@ -226,6 +226,13 @@
               </div>
             </div>
           </div>
+          <div class="audio-view-toolbar">
+            <label for="audioView">音频显示</label>
+            <select id="audioView" aria-label="时间轴音频显示">
+              <option value="waveform">波形</option><option value="spectrogram">频谱图</option><option value="both">波形＋频谱图</option>
+            </select>
+            <span id="audioViewHint" class="muted">原音轨音量起伏</span>
+          </div>
           <div id="timelineScroll" class="timeline-scroll">
             <div id="timelineCanvas" class="timeline-canvas">
               <div id="ruler" class="ruler"></div>
@@ -234,7 +241,7 @@
                   导入视频后，片段将出现在这里
                 </div>
               </div>
-              <div id="captionTrack" class="caption-track"></div>
+              <div id="captionTrack" class="caption-track" title="单击编辑；Ctrl/⌘点击多选，Shift连续选择；空白处框选；拖动所选字幕调整时间"></div>
               <div id="playhead" class="playhead" hidden>
                 <span id="playheadHandle" role="slider" tabindex="0"
                   aria-label="当前播放位置" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"
@@ -342,6 +349,8 @@
             <summary>字幕编辑 · <span id="captionSelectionCount">未选择字幕</span></summary>
             <label id="captionFocusedContent" class="caption-focused-content" hidden>
               字幕内容<textarea id="captionFocusedText" rows="2" aria-label="当前选中的字幕内容"></textarea>
+              <span id="captionTimelineRange" class="muted"></span>
+              <span class="caption-shift-field">时间轴偏移 / 秒<input id="captionTimeShift" type="number" step="0.01" min="-86400" max="86400" title="仅移动字幕的出现时间，原素材时间保留作参考" /></span>
             </label>
             <p class="muted" id="captionStyleHint">勾选字幕可批量编辑；修改一项只影响该项。</p>
             <fieldset id="captionStyleFields" disabled>
@@ -366,7 +375,7 @@
             </fieldset>
           </details>
           <div class="subtitle-list-heading">
-            <span>原素材时间轴</span>
+            <span>原素材时间（不含时间轴偏移）</span>
           </div>
           <div id="subtitleList" class="subtitle-list">
             <p class="muted">生成字幕后，可以在这里逐条校对文字和时间。</p>
@@ -391,8 +400,15 @@
         </p>
         <div class="export-summary">
           <span>预计时长</span><strong id="exportDuration">00:00.00</strong
-          ><span>视频格式</span><strong>MP4 · H.264 · 30 fps</strong>
+          ><span>视频格式</span><strong>MP4 · H.264</strong>
         </div>
+        <div class="export-settings">
+          <label>帧率<select id="exportFps"><option value="30" selected>30 帧 / 秒（默认）</option><option value="60">60 帧 / 秒</option></select></label>
+          <label>分辨率<select id="exportResolution"><option value="480p">480p</option><option value="720p">720p</option><option value="1080p" selected>1080p</option><option value="1440p">1440p · 2K</option><option value="2160p">2160p · 4K</option><option value="source">原素材分辨率</option></select></label>
+          <label>画质<select id="exportQuality"><option value="compact">省空间</option><option value="balanced" selected>均衡（推荐）</option><option value="high">高画质</option></select></label>
+        </div>
+        <p id="exportEstimate" class="muted small-text" aria-live="polite"></p>
+        <p class="muted small-text">保持画面比例，不放大低分辨率素材。60 帧导出不使用运动补帧。</p>
         <label class="export-checkbox"
           ><input id="burnCaptions" type="checkbox" checked />
           将字幕嵌入画面</label

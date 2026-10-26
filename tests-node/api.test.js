@@ -71,6 +71,28 @@ async function waitJob(f, id) {
   }
   throw new Error("Job did not finish");
 }
+
+test("export API selects 60 fps without changing cut or subtitle clocks", { skip: !hasFFmpeg }, async t => {
+  const f = await fixture(t);
+  const input = path.join(f.root, "fps.mp4");
+  await capture("ffmpeg", ["-v","error","-f","lavfi","-i","testsrc2=s=640x360:r=60:d=2","-c:v","libx264",input]);
+  let p = await f.studio.createProject("60 fps");
+  p = await f.studio.importPath(p.id, input);
+  const sid = p.sources[0].id;
+  p = await f.studio.updateEdit(p.id, {revision:p.revision,clips:[{source_id:sid,start:0.1,end:1.12},{source_id:sid,start:1.2,end:1.8}],subtitles:{[sid]:[{start:0.3,end:0.7,text:"Same clock"}]}});
+  for (const options of [{fps:24},{resolution:"8k"},{quality:"bad"}])
+    assert.equal((await f.request(`/api/projects/${p.id}/export`,"POST",options)).status,422);
+  const submit = await f.request(`/api/projects/${p.id}/export`,"POST",{fps:60,resolution:"480p",quality:"balanced"});
+  assert.equal(submit.status,202);
+  const done = await waitJob(f,submit.body.id);
+  assert.equal(done.status,"completed",done.message);
+  assert.equal(done.result.fps,60);
+  assert.equal(done.result.width,640);
+  const data = JSON.parse((await capture("ffprobe",["-v","error","-show_streams","-of","json",await f.studio.jobFile(done.id,"video.mp4")])).stdout);
+  assert.equal(Number(data.streams.find(s=>s.codec_type==="video").nb_frames),98);
+  assert.match(await fs.readFile(await f.studio.jobFile(done.id,"subtitles.srt"),"utf8"),/00:00:00,200 --> 00:00:00,600/);
+  assert.deepEqual((await f.studio.getProject(p.id)).subtitles,p.subtitles);
+});
 test("atomic JSON replacement retries transient locks without losing previous data", async (t) => {
   const f = await fixture(t);
   const file = path.join(f.root, "atomic.json");
@@ -393,7 +415,7 @@ test("styled subtitles persist, export to ASS and render at independent position
   p = await f.studio.importPath(p.id, file);
   const sid = p.sources[0].id;
   const cues = [
-    {start: .1, end: .7, text: "Narration", style: {fontFamily: "Arial", fontSize: 64, color: "#ffff00", position: "top-center"}},
+    {start: .1, end: .7, text: "Narration", shift: .2, style: {fontFamily: "Arial", fontSize: 64, color: "#ffff00", position: "top-center"}},
     {start: .9, end: 1.5, text: "Dialogue", style: {fontFamily: "Arial", fontSize: 64, color: "#ffffff", position: "bottom-center"}},
   ];
   const saved = await f.request(`/api/projects/${p.id}`, "PATCH", {revision: p.revision, clips: p.clips, subtitles: {[sid]: cues}});
@@ -408,9 +430,11 @@ test("styled subtitles persist, export to ASS and render at independent position
   assert.equal(done.status, "completed", done.message);
   const ass = await fetch(f.url + done.result.styled_subtitles_url);
   assert.equal(ass.status, 200);
-  assert.match(await ass.text(), /Style: Cue0,Arial/);
+  const styledText = await ass.text();
+  assert.match(styledText, /Style: Cue0,Arial/);
+  assert.match(styledText, /0:00:00\.30,0:00:00\.90/);
   const video = await f.studio.jobFile(job.id, "video.mp4");
-  for (const [at, top] of [[.3, true], [1.1, false]]) {
+  for (const [at, top] of [[.8, true], [1.1, false]]) {
     const pixels = spawnSync("ffmpeg", ["-v", "error", "-ss", String(at), "-i", video, "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], {windowsHide: true, maxBuffer: 2 * 1024 * 1024});
     assert.equal(pixels.status, 0, pixels.stderr.toString());
     const ys = [];
@@ -460,6 +484,68 @@ test("waveform API extracts real audio once, caches it and preserves the project
   assert.equal(noAudio.status, 200);
   assert.equal(noAudio.body.has_audio, false);
   assert.deepEqual(noAudio.body.peaks, []);
+});
+
+test("spectrogram images retain time and frequency ordering, cache and validate tile bounds", {skip: !hasFFmpeg}, async (t) => {
+  const f = await fixture(t);
+  let p = await f.studio.createProject("Frequency spectrum");
+  const file = path.join(f.root, "tones.mp4");
+  await capture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=black:s=160x90:r=30:d=2",
+    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000:duration=1",
+    "-f", "lavfi", "-i", "sine=frequency=2000:sample_rate=16000:duration=1",
+    "-filter_complex", "[1:a][2:a]concat=n=2:v=0:a=1[a]", "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac", "-t", "2", file]);
+  p = await f.studio.importPath(p.id, file);
+  const sid = p.sources[0].id, url = `${f.url}/api/projects/${p.id}/sources/${sid}/spectrogram`;
+  const responses = await Promise.all([fetch(url), fetch(url)]);
+  assert.ok(responses.every(r => r.status === 200));
+  assert.match(responses[0].headers.get("content-type"), /image\/png/);
+  const images = await Promise.all(responses.map(async r => Buffer.from(await r.arrayBuffer())));
+  assert.deepEqual(images[0], images[1]);
+  assert.equal(images[0].readUInt32BE(16), 2048);
+  const png = await f.studio.spectrogram(p.id, sid);
+  const before = (await fs.stat(png)).mtimeMs;
+  await f.studio.spectrogram(p.id, sid);
+  assert.equal((await fs.stat(png)).mtimeMs, before);
+  const raw = spawnSync("ffmpeg", ["-v", "error", "-i", png, "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"], {windowsHide: true, maxBuffer: 4 * 1024 * 1024});
+  assert.equal(raw.status, 0, raw.stderr.toString());
+  const peakRow = x => {
+    const scores = Array.from({length: 512}, (_, y) => {
+      let value = 0;
+      for (let offset = -5; offset <= 5; offset++) {
+        const index = (y * 2048 + x + offset) * 3;
+        value += raw.stdout[index] + raw.stdout[index + 1] + raw.stdout[index + 2];
+      }
+      return value;
+    });
+    return scores.indexOf(Math.max(...scores));
+  };
+  assert.ok(peakRow(512) > peakRow(1536) + 20, "low tone must be below high tone in their respective time intervals");
+  for (const [x, hz] of [[512, 440], [1536, 2000]]) {
+    const expectedRow = 511 * (1 - (hz - 80) / (8000 - 80));
+    assert.ok(Math.abs(peakRow(x) - expectedRow) < 5, `frequency rows must match their calibrated frequencies: ${hz} Hz at ${peakRow(x)}, expected ${expectedRow}`);
+  }
+  const tile = await fetch(url + "?tile=0");
+  assert.equal(tile.status, 200);
+  assert.equal(Buffer.from(await tile.arrayBuffer()).readUInt32BE(16), 1024);
+  assert.equal((await fetch(url + "?tile=1")).status, 400);
+  assert.equal((await fetch(url + "?tile=..%2Fbad")).status, 400);
+  assert.equal((await f.studio.getProject(p.id)).revision, p.revision);
+  assert.equal(f.studio.waveformTasks.size, 0);
+});
+
+test("unused source removal respects revisions, usage and recoverable media", async (t) => {
+  const f = await fixture(t);
+  let p = await fakeSource(f);
+  const sid = p.sources[0].id, file = await f.studio.sourcePath(p.id, sid);
+  const url = `/api/projects/${p.id}/sources/${sid}`;
+  assert.equal((await f.request(url, "DELETE", {revision: p.revision})).status, 400);
+  p = await f.studio.updateEdit(p.id, {revision: p.revision, clips: [], subtitles: p.subtitles, voiceovers: []});
+  assert.equal((await f.request(url, "DELETE", {revision: p.revision - 1})).status, 409);
+  const removed = await f.request(url, "DELETE", {revision: p.revision});
+  assert.equal(removed.status, 200);
+  assert.deepEqual(removed.body.sources, []);
+  assert.deepEqual(removed.body.subtitles, {});
+  assert.ok((await fs.stat(file)).isFile());
 });
 
 test("shutdown terminates owned child processes and releases the project directory", async (t) => {

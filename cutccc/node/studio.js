@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { constants } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
@@ -22,6 +22,8 @@ import {
 } from "./media.js";
 import { launch, stopProcess } from "./processes.js";
 import { generateWaveform, WAVEFORM_VERSION } from "./waveform.js";
+import { generateSpectrogram, spectrumRegion, SPECTROGRAM_VERSION } from "./spectrogram.js";
+import { exportOptions } from "../web/export-options.js";
 
 const uuid = () => randomUUID().replaceAll("-", "");
 const now = () => Date.now() / 1000;
@@ -339,6 +341,22 @@ export class Studio {
       return this.save(p);
     });
   }
+  async removeSource(id, sid, revision) {
+    identifier(sid);
+    return this.exclusive(async () => {
+      const p = await this.getProject(id);
+      if (p.revision !== revision) throw new APIError("Project changed in another client. Reload before saving.", 409);
+      if (!p.sources.some(s => s.id === sid)) throw new APIError("Source not found", 404);
+      if (p.clips.some(c => c.source_id === sid) || (p.voiceovers || []).some(v => v.source_id === sid))
+        throw new APIError("Remove the source from the timeline before removing it from the library");
+      if ((await this.listJobs(id)).some(j => ["queued", "running"].includes(j.status)))
+        throw new APIError("Wait for the project's active tasks before removing a source", 409);
+      p.sources = p.sources.filter(s => s.id !== sid);
+      delete p.subtitles[sid];
+      // Keep the files on disk so existing project backups remain recoverable.
+      return this.save(p);
+    });
+  }
   async waveform(id, sid) {
     if (this.closed) throw new APIError("Server is shutting down", 503);
     const file = await this.sourcePath(id, sid);
@@ -364,6 +382,32 @@ export class Studio {
       await fs.mkdir(folder, {recursive: true});
       await this.write(cache, result);
       return result;
+    });
+    this.waveformTasks.set(key, task);
+    this.waveformQueue = task.catch(() => {});
+    try { return await task; } finally { this.waveformTasks.delete(key); }
+  }
+  async spectrogram(id, sid, tile = "overview") {
+    if (this.closed) throw new APIError("Server is shutting down", 503);
+    const file = await this.sourcePath(id, sid);
+    const source = (await this.getProject(id)).sources.find(s => s.id === sid);
+    if (!source.has_audio) throw new APIError("Source has no audio track");
+    const region = spectrumRegion(tile, source.duration);
+    const stat = await fs.stat(file);
+    const fingerprint = createHash("sha256").update(`${SPECTROGRAM_VERSION}:${stat.size}:${stat.mtimeMs}:${source.duration}`).digest("hex").slice(0, 20);
+    const folder = this.projectDir(id, "spectrograms", `${sid}-${fingerprint}`);
+    const cache = path.join(folder, `${tile}.png`);
+    if ((await fs.stat(cache).catch(() => null))?.size > 32) return cache;
+    const key = `spectrum:${id}:${sid}:${fingerprint}:${tile}`;
+    if (this.waveformTasks.has(key)) return this.waveformTasks.get(key);
+    const task = this.waveformQueue.then(async () => {
+      if (this.closed) throw new APIError("Server is shutting down", 503);
+      const image = await generateSpectrogram(file, region, this.processes);
+      await fs.mkdir(folder, {recursive: true});
+      const temporary = cache + "." + uuid() + ".tmp";
+      try { await fs.writeFile(temporary, image); await fs.rename(temporary, cache); }
+      finally { await fs.unlink(temporary).catch(() => {}); }
+      return cache;
     });
     this.waveformTasks.set(key, task);
     this.waveformQueue = task.catch(() => {});
@@ -401,7 +445,7 @@ export class Studio {
   async submit(
     id,
     kind,
-    { source_id, burn_subtitles = true, language = "auto" } = {},
+    { source_id, burn_subtitles = true, language = "auto", ...options } = {},
   ) {
     return this.exclusive(async () => {
       if (this.closed) throw new Error("Server is shutting down");
@@ -424,6 +468,8 @@ export class Studio {
             409,
           );
       } else if (kind === "export") {
+        try { options = exportOptions(options); }
+        catch (e) { throw new APIError(e.message, 422); }
         validateEdit(p.sources, p.clips, p.subtitles);
         validateVoiceovers(p.sources, p.clips, p.voiceovers || []);
         if (!p.clips.length) throw new APIError("Add a clip before exporting");
@@ -441,6 +487,7 @@ export class Studio {
         created_at: now(),
         project_revision: p.revision,
         ...(kind === "transcribe" ? { language } : {}),
+        ...(kind === "export" ? { export_options: options, burn_subtitles } : {}),
       };
       await this.write(this.jobDir(jid, "job.json"), j);
       await this.write(this.jobDir(jid, "project-snapshot.json"), p);
@@ -540,6 +587,7 @@ export class Studio {
           (sid) => this.sourcePath(p.id, sid),
           (cmd, args, cwd, d) => this.runProcess(jid, cmd, args, cwd, d),
           burn,
+          j.export_options,
         );
         result.video_url = `/api/jobs/${jid}/video`;
         result.subtitles_url = `/api/jobs/${jid}/subtitles`;

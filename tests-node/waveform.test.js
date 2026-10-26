@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { WaveformPeaks } from "../cutccc/node/waveform.js";
+import { spectrumRegion } from "../cutccc/node/spectrogram.js";
+
+test("spectrogram tile ranges are bounded and retain the last partial interval", () => {
+  assert.deepEqual(spectrumRegion("overview", 45).duration, 45);
+  assert.deepEqual(spectrumRegion("2", 45), {start: 40, duration: 5, width: 1024, height: 512});
+  for (const tile of ["-1", "0.5", "3", "../../x", "1e3", "999999999999999999"])
+    assert.throws(() => spectrumRegion(tile, 45));
+});
 
 test("waveform streaming preserves samples across odd byte chunks and final partial buckets", () => {
   const samples = [...Array(80).fill(0), ...Array(80).fill(16384), -32768];

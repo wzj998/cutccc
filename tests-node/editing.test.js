@@ -45,6 +45,25 @@ test("voiceover captions use output placement and retain their independent style
   assert.deepEqual(cues, [{start: 3, end: 5, text: "dialogue"}, {start: 3.5, end: 5.5, text: "narration", style}]);
 });
 
+test("subtitle shifts move display times independently of video and narration audio", () => {
+  const clips = [{source_id: "scene", start: 20, end: 30}];
+  const voices = [{source_id: "voice", start: 3, volume: 1}];
+  const subtitles = {
+    scene: [{start: 21, end: 23, text: "A", shift: 2}],
+    voice: [{start: 0, end: 2, text: "B", shift: 2}],
+  };
+  const sources = [{id: "scene", duration: 30}, {id: "voice", duration: 2}];
+  validateEdit(sources, clips, subtitles);
+  assert.deepEqual(mapSubtitles(clips, subtitles, voices, sources), [
+    {start: 3, end: 5, text: "A"}, {start: 5, end: 7, text: "B"},
+  ]);
+  assert.equal(voices[0].start, 3);
+  assert.equal(clips[0].start, 20);
+  for (const shift of [NaN, Infinity, "2", 86401])
+    assert.throws(() => validateEdit(sources, clips, {scene: [{start: 21, end: 23, text: "A", shift}]}));
+  assert.deepEqual(mapSubtitles(clips, {scene: [{start: 21, end: 23, text: "A", shift: -2}]}), [{start: 0, end: 1, text: "A"}]);
+});
+
 test("existing source-clock subtitles survive reordering, reuse and clipping", () => {
   const sources = [
       { id: "a", duration: 10 },

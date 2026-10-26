@@ -1,4 +1,5 @@
 import readline from "node:readline";
+import { exportSchema } from "../web/export-options.js";
 
 const string = { type: "string" },
   integer = { type: "integer" },
@@ -50,7 +51,7 @@ const definitions = [
   [
     "export_video",
     "Queue a saved project snapshot export with FFmpeg.",
-    { project_id: string, burn_subtitles: boolean },
+    { project_id: string, burn_subtitles: boolean, ...exportSchema },
     ["project_id"],
   ],
   [
@@ -121,6 +122,9 @@ export async function callTool(base, name, a = {}) {
     case "export_video":
       return apiCall(base, "POST", `/api/projects/${id}/export`, {
         burn_subtitles: a.burn_subtitles ?? true,
+        fps: a.fps,
+        resolution: a.resolution,
+        quality: a.quality,
       });
     case "get_job": {
       const j = await apiCall(

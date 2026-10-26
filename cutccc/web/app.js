@@ -32,6 +32,13 @@ const state = {
   captionRenderKey: null,
   waveforms: new Map(),
   waveformDrawQueued: false,
+  audioView: "waveform",
+  spectrograms: new Map(),
+  spectrogramLoading: 0,
+  captionGesture: null,
+  captionSelectionAnchor: null,
+  suppressCaptionClick: false,
+  previewCues: null,
 };
 const esc = (value) =>
   String(value ?? "").replace(
@@ -104,6 +111,7 @@ function refreshDirtyState() {
   updateButtons();
 }
 function markDirty(group = null) {
+  state.previewCues = null;
   editHistory.record(editSnapshot(), {group});
   refreshDirtyState();
 }
@@ -114,6 +122,7 @@ function markSaved(resetHistory = true) {
 }
 function undoEdit(redo = false) {
   if (!state.project || state.busy || state.saving) return;
+  if (state.captionGesture) finishCaptionGesture(null, true);
   const edit = redo ? editHistory.redo() : editHistory.undo();
   if (!edit) return;
   const active = document.activeElement;
@@ -221,6 +230,7 @@ async function loadProject(id, confirmChanges = true) {
   pause();
   state.project = await api(`/api/projects/${id}`);
   state.waveforms.clear();
+  state.spectrograms.clear();
   state.clip = state.project.clips.length ? 0 : -1;
   state.source = selected()?.source_id || state.project.sources[0]?.id || null;
   state.jobs = [];
@@ -480,6 +490,7 @@ function mappedCues() {
           start: offset + a - c.start,
           end: offset + b - c.start,
           text: cue.text,
+          style: cue.style,
           sourceId: c.source_id, index, occurrence: `clip:${clipIndex}:${index}`,
         });
     }
@@ -489,15 +500,25 @@ function mappedCues() {
     const s = state.project.sources.find(s => s.id === voice.source_id);
     for (const [index, cue] of (state.project.subtitles[voice.source_id] || []).entries()) {
       const start = Math.max(0, cue.start), end = Math.min(cue.end, s.duration, offset - voice.start);
-      if (end > start) result.push({start: voice.start + start, end: voice.start + end, text: cue.text,
+      if (end > start) result.push({start: voice.start + start, end: voice.start + end, text: cue.text, style: cue.style,
         sourceId: voice.source_id, index, occurrence: `voice:${voiceIndex}:${index}`});
     }
   }
-  return result.sort((a, b) => a.start - b.start);
+  return result.map(cue => {
+    const shift = state.project.subtitles[cue.sourceId][cue.index].shift || 0;
+    return {...cue, start: Math.max(0, cue.start + shift), end: Math.min(offset, cue.end + shift)};
+  }).filter(cue => cue.end > cue.start).sort((a, b) => a.start - b.start);
 }
 function renderTimeline() {
   const p = state.project;
   const scroll = $("timelineScroll");
+  const timelinePanel = scroll.closest(".timeline-panel");
+  timelinePanel.dataset.audioView = state.audioView;
+  const audioHeight = `${state.audioView === "waveform" ? 28 : state.audioView === "both" ? 112 : 84}px`;
+  if (timelinePanel.style.getPropertyValue("--clip-audio-height") !== audioHeight) {
+    timelinePanel.style.setProperty("--clip-audio-height", audioHeight);
+    requestAnimationFrame(fitPreview);
+  }
   const previousZoom = state.zoom;
   const previousTime = scroll.scrollLeft / previousZoom;
   const playheadTime = Number($("fullscreenSeek").value) || 0;
@@ -534,12 +555,14 @@ function renderTimeline() {
     ? p.clips
         .map((c, i) => {
           const s = p.sources.find((s) => s.id === c.source_id);
-          return `<div class="timeline-clip ${i === state.clip ? "selected" : ""}" data-clip="${i}" draggable="true" role="button" tabindex="0" aria-label="片段 ${i + 1}：${esc(s.name)}" style="width:${duration(c) * state.zoom}px"><img src="${mediaUrl(c.source_id, "poster")}" alt=""><span>${i + 1} · ${esc(s.name)}</span><small>${time(duration(c))}</small><canvas class="clip-waveform" aria-hidden="true"></canvas><small class="waveform-status">${s.has_audio ? "生成波形中…" : "无音轨"}</small></div>`;
+          return `<div class="timeline-clip ${i === state.clip ? "selected" : ""}" data-clip="${i}" draggable="true" role="button" tabindex="0" aria-label="片段 ${i + 1}：${esc(s.name)}" style="width:${duration(c) * state.zoom}px"><img src="${mediaUrl(c.source_id, "poster")}" alt=""><span>${i + 1} · ${esc(s.name)}</span><small>${time(duration(c))}</small><canvas class="clip-waveform" aria-hidden="true"></canvas><small class="waveform-status">${s.has_audio ? "生成波形中…" : "无音轨"}</small><canvas class="clip-spectrogram" aria-hidden="true"></canvas><small class="spectrogram-status">${s.has_audio ? "生成频谱中…" : "无音轨"}</small></div>`;
         })
         .join("")
     : '<div class="timeline-placeholder">导入视频后，片段将出现在这里</div>';
   const lanes = [];
-  $("captionTrack").innerHTML = mappedCues()
+  const timelineCues = mappedCues();
+  state.previewCues = timelineCues;
+  $("captionTrack").innerHTML = timelineCues
     .map((c) => {
       let lane = lanes.findIndex(end => end <= c.start);
       if (lane < 0) lane = lanes.length;
@@ -563,7 +586,7 @@ function renderTimeline() {
 }
 function ensureWaveforms() {
   const project = state.project;
-  if (!project) return;
+  if (!project || state.audioView === "spectrogram") return;
   for (const id of new Set(project.clips.map(clip => clip.source_id))) {
     if (!project.sources.find(source => source.id === id)?.has_audio) continue;
     const key = `${project.id}:${id}`;
@@ -584,6 +607,7 @@ function scheduleWaveformDraw() {
 }
 function drawClipWaveforms() {
   if (!state.project) return;
+  if (state.audioView === "spectrogram") { drawClipSpectrograms(); return; }
   const scroll = $("timelineScroll"), bounds = scroll.getBoundingClientRect();
   const viewportLeft = bounds.left + scroll.clientLeft, viewportRight = viewportLeft + scroll.clientWidth;
   const ratio = Math.min(2, window.devicePixelRatio || 1), height = 28;
@@ -623,9 +647,112 @@ function drawClipWaveforms() {
       ctx.fillStyle = "#aff2bd"; ctx.fillRect(x, height / 2 - inner, 1.5, inner * 2);
     }
   }
+  drawClipSpectrograms();
+}
+function setAudioView(value) {
+  state.audioView = ["waveform", "spectrogram", "both"].includes(value) ? value : "waveform";
+  $("audioView").value = state.audioView;
+  const hint = state.audioView === "waveform" ? "原音轨音量起伏" : "下→上：80 Hz–8 kHz · 越亮能量越强";
+  $("audioViewHint").textContent = hint;
+  $("audioViewHint").title = hint;
+  localStorage.setItem("cutccc-audio-view", state.audioView);
+  renderTimeline();
+}
+function requestSpectrogram(source, tile) {
+  const projectId = state.project.id, key = `${projectId}:${source.id}:${tile}`;
+  const cached = state.spectrograms.get(key);
+  if (cached) return cached;
+  if (state.spectrogramLoading >= 4) return null;
+  const image = new Image(), entry = {status: "loading", image};
+  state.spectrograms.set(key, entry);
+  state.spectrogramLoading++;
+  const complete = status => {
+    entry.status = status; state.spectrogramLoading--;
+    scheduleWaveformDraw();
+  };
+  image.onload = () => complete("ready");
+  image.onerror = () => complete("error");
+  image.src = `/api/projects/${projectId}/sources/${source.id}/spectrogram?tile=${tile}&v=2`;
+  return entry;
+}
+function drawClipSpectrograms() {
+  if (!state.project || state.audioView === "waveform") return;
+  const scroll = $("timelineScroll"), bounds = scroll.getBoundingClientRect();
+  const viewportLeft = bounds.left + scroll.clientLeft, viewportRight = viewportLeft + scroll.clientWidth;
+  const ratio = Math.min(2, window.devicePixelRatio || 1), height = 84, needed = new Set();
+  for (const block of $("clipTrack").querySelectorAll("[data-clip]")) {
+    const clip = state.project.clips[Number(block.dataset.clip)];
+    if (!clip) continue;
+    const source = state.project.sources.find(s => s.id === clip.source_id);
+    const canvas = block.querySelector(".clip-spectrogram"), status = block.querySelector(".spectrogram-status");
+    const rect = block.getBoundingClientRect();
+    const left = Math.max(0, viewportLeft - rect.left), right = Math.min(rect.width, viewportRight - rect.left);
+    canvas.hidden = right <= left;
+    if (canvas.hidden) continue;
+    const width = Math.ceil(right - left);
+    canvas.style.left = `${left}px`; canvas.style.width = `${width}px`;
+    canvas.width = Math.ceil(width * ratio); canvas.height = Math.ceil(height * ratio);
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.fillStyle = "#090717"; ctx.fillRect(0, 0, width, height);
+    let loading = false, error = false;
+    if (source.has_audio) {
+      const start = Math.max(clip.start, clip.start + left / state.zoom);
+      const end = Math.min(clip.end, source.duration, clip.start + right / state.zoom);
+      const overview = state.zoom <= 2048 / source.duration;
+      const first = overview ? 0 : Math.floor(start / 20), last = overview ? 0 : Math.floor(Math.max(start, end - .000001) / 20);
+      for (let tileIndex = first; tileIndex <= last; tileIndex++) {
+        const tile = overview ? "overview" : String(tileIndex);
+        const key = `${state.project.id}:${source.id}:${tile}`;
+        needed.add(key);
+        const entry = requestSpectrogram(source, tile);
+        if (!entry || entry.status === "loading") { loading = true; continue; }
+        if (entry.status === "error") { error = true; continue; }
+        const from = overview ? 0 : tileIndex * 20, span = overview ? source.duration : Math.min(20, source.duration - from);
+        const a = Math.max(start, from), b = Math.min(end, from + span);
+        if (b <= a) continue;
+        for (let y = 0; y < height; y++) {
+          const highHz = 80 * Math.pow(100, 1 - y / height);
+          const lowHz = 80 * Math.pow(100, 1 - (y + 1) / height);
+          const sourceY = (8000 - highHz) / 7920 * entry.image.naturalHeight;
+          const sourceHeight = (highHz - lowHz) / 7920 * entry.image.naturalHeight;
+          ctx.drawImage(entry.image, (a - from) / span * entry.image.naturalWidth, sourceY,
+            (b - a) / span * entry.image.naturalWidth, sourceHeight,
+            (a - clip.start) * state.zoom - left, y, (b - a) * state.zoom, 1);
+        }
+      }
+      ctx.font = "9px sans-serif";
+      for (const [y, label] of [[0, "8k"], [height / 2, "800"], [height - 1, "80 Hz"]]) {
+        ctx.fillStyle = "#ffffff22"; ctx.fillRect(0, y, width, .6);
+        const textY = Math.max(10, Math.min(height - 2, y + 3));
+        ctx.fillStyle = "#080810bb"; ctx.fillRect(1, textY - 9, label.length * 5 + 3, 11);
+        ctx.fillStyle = "#e1e4eb"; ctx.fillText(label, 3, textY);
+      }
+    }
+    status.textContent = !source.has_audio ? "无音轨" : error ? "频谱不可用，点击重试" : loading ? "生成频谱中…" : "";
+    status.hidden = !status.textContent;
+    status.classList.toggle("retry", error);
+  }
+  // Bound decoded image memory while keeping the currently visible tiles.
+  for (const [key, entry] of state.spectrograms) {
+    if (state.spectrograms.size <= 80) break;
+    if (!needed.has(key) && entry.status !== "loading") state.spectrograms.delete(key);
+  }
 }
 function renderSubtitles() {
   const entries = subtitleEntries();
+  const placements = new Map();
+  for (const cue of mappedCues()) {
+    const key = `${cue.sourceId}:${cue.index}`;
+    if (!placements.has(key)) placements.set(key, []);
+    placements.get(key).push(cue);
+  }
+  const placementLabel = key => {
+    const list = placements.get(key) || [];
+    const position = Number($("fullscreenSeek").value);
+    const cue = list.find(c => c.start <= position && position < c.end) || list[0];
+    return cue ? `成片 ${time(cue.start)} – ${time(cue.end)}${list.length > 1 ? `（${list.length}处）` : ""}` : "未出现在当前成片中";
+  };
   if (state.subtitleSelectionProject !== state.project?.id) {
     state.subtitleSelection.clear();
     state.subtitleSelectionProject = state.project?.id;
@@ -637,7 +764,7 @@ function renderSubtitles() {
     ? entries
         .map(
           ({cue: c, index: i, sourceId, key, name}) =>
-            `<div class="subtitle-row ${state.subtitleSelection.has(key) ? "selected" : ""}" data-cue="${i}" data-cue-source="${sourceId}"><div class="subtitle-select-line"><input type="checkbox" data-select-cue="${key}" aria-label="选择字幕 ${i + 1}" ${state.subtitleSelection.has(key) ? "checked" : ""}><span title="${esc(name)}">${esc(name)}</span><button class="button small" data-edit-style="${key}">样式</button></div><div class="subtitle-time"><span class="number">${String(i + 1).padStart(2, "0")}</span><input type="number" min="0" step="0.001" data-field="start" aria-label="字幕 ${i + 1} 开始时间" value="${c.start.toFixed(3)}"><span class="separator">—</span><input type="number" min="0" step="0.001" data-field="end" aria-label="字幕 ${i + 1} 结束时间" value="${c.end.toFixed(3)}"><button class="icon-button" data-remove-cue="${i}" title="删除字幕" aria-label="删除字幕 ${i + 1}">×</button></div><textarea data-field="text" aria-label="字幕 ${i + 1} 文字">${esc(c.text)}</textarea></div>`,
+            `<div class="subtitle-row ${state.subtitleSelection.has(key) ? "selected" : ""}" data-cue="${i}" data-cue-source="${sourceId}"><div class="subtitle-select-line"><input type="checkbox" data-select-cue="${key}" aria-label="选择字幕 ${i + 1}" ${state.subtitleSelection.has(key) ? "checked" : ""}><span title="${esc(name)}">${esc(name)}</span><button class="button small" data-edit-style="${key}">样式</button></div><div class="subtitle-placement">${placementLabel(key)}</div><div class="subtitle-clock-label">原素材起止 / 秒</div><div class="subtitle-time"><span class="number">${String(i + 1).padStart(2, "0")}</span><input type="number" min="0" step="0.001" data-field="start" aria-label="字幕 ${i + 1} 原素材开始时间" value="${c.start.toFixed(3)}"><span class="separator">—</span><input type="number" min="0" step="0.001" data-field="end" aria-label="字幕 ${i + 1} 原素材结束时间" value="${c.end.toFixed(3)}"><button class="icon-button" data-remove-cue="${i}" title="删除字幕" aria-label="删除字幕 ${i + 1}">×</button></div><textarea data-field="text" aria-label="字幕 ${i + 1} 文字">${esc(c.text)}</textarea></div>`,
         )
         .join("")
     : '<p class="muted" style="margin-top:18px">生成字幕后，可以在这里逐条校对文字和时间，也可以点击 ＋ 手动添加。</p>';
@@ -654,6 +781,7 @@ function selectedSubtitleEntries() {
 function openTimelineCaption(occurrence) {
   const mapped = mappedCues().find(cue => cue.occurrence === occurrence);
   if (!mapped) return;
+  state.captionSelectionAnchor = occurrence;
   state.subtitleSelectionProject = state.project.id;
   state.subtitleSelection = new Set([`${mapped.sourceId}:${mapped.index}`]);
   // Seek the clicked occurrence, including reused clips and repeated voiceovers.
@@ -662,12 +790,156 @@ function openTimelineCaption(occurrence) {
   document.querySelector('[data-tab="subtitles"]').click();
   renderSubtitles();
   renderTimeline();
-  $("captionStyleEditor").open = true;
-  $("captionStyleEditor").scrollIntoView({block: "nearest"});
-  $("captionFocusedText").focus({preventScroll: true});
+  const row = [...$("subtitleList").querySelectorAll("[data-cue]")].find(
+    row => row.dataset.cueSource === mapped.sourceId && Number(row.dataset.cue) === mapped.index,
+  );
+  if (row) {
+    row.scrollIntoView({block: "center", inline: "nearest"});
+    row.querySelector("textarea").focus({preventScroll: true});
+  }
+}
+function captionMoveContext() {
+  const placements = mappedCues().filter(c => state.subtitleSelection.has(`${c.sourceId}:${c.index}`));
+  const keys = new Set(placements.map(c => `${c.sourceId}:${c.index}`));
+  const entries = selectedSubtitleEntries().filter(entry => keys.has(entry.key)).map(entry => ({...entry, shift: entry.cue.shift || 0}));
+  if (!entries.length) return null;
+  return {projectId: state.project.id, placements, entries,
+    minimum: Math.max(...placements.map(c => -c.start), ...entries.map(e => -86400 - e.shift)),
+    maximum: Math.min(...placements.map(c => total() - c.end), ...entries.map(e => 86400 - e.shift))};
+}
+function commitCaptionMove(context, delta, occurrence) {
+  if (!context || state.project?.id !== context.projectId || Math.abs(delta) < .000001) return;
+  for (const entry of context.entries) {
+    const shift = Math.round((entry.shift + delta) * 1e6) / 1e6;
+    if (shift) entry.cue.shift = shift; else delete entry.cue.shift;
+  }
+  markDirty();
+  $("subtitleScope").value = "project";
+  const anchor = context.placements.find(c => c.occurrence === occurrence) || context.placements[0];
+  seekOutput(anchor.start + delta + Math.min(.05, (anchor.end - anchor.start) / 2), false);
+  renderSubtitles(); renderTimeline();
+}
+function selectTimelineCaption(block, event) {
+  const key = block.dataset.captionKey, occurrence = block.dataset.captionOccurrence;
+  if (event.shiftKey) {
+    const cues = mappedCues();
+    let from = cues.findIndex(c => c.occurrence === state.captionSelectionAnchor);
+    const to = cues.findIndex(c => c.occurrence === occurrence);
+    if (from < 0) from = to;
+    const selection = event.ctrlKey || event.metaKey ? new Set(state.subtitleSelection) : new Set();
+    for (const cue of cues.slice(Math.min(from, to), Math.max(from, to) + 1)) selection.add(`${cue.sourceId}:${cue.index}`);
+    state.subtitleSelection = selection;
+  } else {
+    if (state.subtitleSelection.has(key)) state.subtitleSelection.delete(key); else state.subtitleSelection.add(key);
+    state.captionSelectionAnchor = occurrence;
+  }
+  state.subtitleSelectionProject = state.project.id;
+  renderSubtitles();
+}
+function startCaptionGesture(event) {
+  if (event.button !== 0 || !event.isPrimary || !state.project || state.busy || state.saving || state.captionGesture) return;
+  const block = event.target.closest("[data-caption-occurrence]");
+  if (block && (event.ctrlKey || event.metaKey || event.shiftKey)) { event.preventDefault(); return; }
+  event.preventDefault();
+  pause();
+  const track = $("captionTrack"), rect = track.getBoundingClientRect();
+  if (block && !state.subtitleSelection.has(block.dataset.captionKey)) {
+    state.subtitleSelection = new Set([block.dataset.captionKey]);
+    state.subtitleSelectionProject = state.project.id;
+    renderSubtitles();
+  }
+  const context = block ? captionMoveContext() : null;
+  if (block && !context) return;
+  const overlay = document.createElement("div");
+  overlay.className = block ? "caption-move-label" : "caption-selection-box";
+  overlay.hidden = true;
+  (block ? document.body : track).append(overlay);
+  state.captionGesture = {kind: block ? "move" : "box", pointerId: event.pointerId,
+    projectId: state.project.id, occurrence: block?.dataset.captionOccurrence, context, overlay,
+    startX: event.clientX - rect.left, startY: event.clientY - rect.top + track.scrollTop,
+    clientX: event.clientX, clientY: event.clientY, delta: 0, moved: false,
+    initialSelection: new Set(state.subtitleSelection),
+    previousSelection: event.ctrlKey || event.metaKey ? new Set(state.subtitleSelection) : new Set()};
+  track.setPointerCapture(event.pointerId);
+}
+function moveCaptionGesture(event) {
+  const gesture = state.captionGesture;
+  if (!gesture || event.pointerId !== gesture.pointerId) return;
+  event.preventDefault();
+  if (Math.hypot(event.clientX - gesture.clientX, event.clientY - gesture.clientY) >= 3) gesture.moved = true;
+  if (!gesture.moved) return;
+  gesture.overlay.hidden = false;
+  const track = $("captionTrack"), rect = track.getBoundingClientRect();
+  const x = event.clientX - rect.left, y = event.clientY - rect.top + track.scrollTop;
+  if (gesture.kind === "move") {
+    gesture.delta = Math.max(gesture.context.minimum, Math.min(gesture.context.maximum,
+      Math.round((x - gesture.startX) / state.zoom * 30) / 30));
+    let snapped = false;
+    if (!event.altKey) {
+      const anchor = gesture.context.placements.find(c => c.occurrence === gesture.occurrence);
+      const edges = [0];
+      for (const clip of state.project.clips) edges.push(edges[edges.length - 1] + duration(clip));
+      const requestedDelta = gesture.delta;
+      let closest = 8 / state.zoom;
+      for (const edge of edges) for (const point of [anchor.start, anchor.end]) {
+        const delta = edge - point, distance = Math.abs(delta - requestedDelta);
+        if (delta >= gesture.context.minimum && delta <= gesture.context.maximum && distance < closest) {
+          closest = distance; gesture.delta = delta; snapped = true;
+        }
+      }
+    }
+    for (const block of track.querySelectorAll("[data-caption-key]")) {
+      if (!state.subtitleSelection.has(block.dataset.captionKey)) continue;
+      block.classList.add("dragging");
+      block.style.transform = `translateX(${gesture.delta * state.zoom}px)`;
+    }
+    gesture.overlay.textContent = `${gesture.context.entries.length} 条字幕 · ${gesture.delta < 0 ? "−" : "+"}${time(Math.abs(gesture.delta))}${snapped ? " · 已吸附切点" : ""}`;
+    gesture.overlay.style.left = `${Math.max(8, Math.min(innerWidth - 220, event.clientX + 12))}px`;
+    gesture.overlay.style.top = `${Math.max(8, event.clientY - 34)}px`;
+  } else {
+    const left = Math.min(x, gesture.startX), top = Math.min(y, gesture.startY);
+    const right = Math.max(x, gesture.startX), bottom = Math.max(y, gesture.startY);
+    Object.assign(gesture.overlay.style, {left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px`});
+    const selection = new Set(gesture.previousSelection);
+    for (const block of track.querySelectorAll("[data-caption-key]")) {
+      const bx = parseFloat(block.style.left), by = parseFloat(block.style.top);
+      if (bx < right && bx + block.offsetWidth > left && by < bottom && by + block.offsetHeight > top)
+        selection.add(block.dataset.captionKey);
+    }
+    state.subtitleSelection = selection;
+    state.subtitleSelectionProject = state.project.id;
+    renderCaptionStyleEditor();
+  }
+}
+function finishCaptionGesture(event, cancel = false) {
+  const gesture = state.captionGesture;
+  if (!gesture || (event && event.pointerId !== gesture.pointerId)) return;
+  if (event?.type === "pointerup") moveCaptionGesture(event);
+  state.captionGesture = null;
+  gesture.overlay.remove();
+  const track = $("captionTrack");
+  if (track.hasPointerCapture(gesture.pointerId)) track.releasePointerCapture(gesture.pointerId);
+  for (const block of track.querySelectorAll(".dragging")) { block.style.transform = ""; block.classList.remove("dragging"); }
+  state.suppressCaptionClick = true;
+  setTimeout(() => { state.suppressCaptionClick = false; }, 0);
+  if (cancel || event?.type === "pointercancel" || state.project?.id !== gesture.projectId) {
+    if (gesture.kind === "box" && state.project?.id === gesture.projectId) {
+      state.subtitleSelection = gesture.initialSelection; renderSubtitles();
+    }
+    return;
+  }
+  if (gesture.kind === "move") {
+    if (gesture.moved) commitCaptionMove(gesture.context, gesture.delta, gesture.occurrence);
+    else openTimelineCaption(gesture.occurrence);
+  } else {
+    if (!gesture.moved) state.subtitleSelection = gesture.previousSelection;
+    renderSubtitles();
+  }
 }
 function previewSubtitle(sourceId, index) {
   const cue = state.project.subtitles[sourceId][index];
+  const mapped = mappedCues().find(c => c.sourceId === sourceId && c.index === index);
+  if (mapped) { seekOutput(mapped.start + Math.min(.05, (mapped.end - mapped.start) / 2), false); return; }
   const voice = (state.project.voiceovers || []).find(v => v.source_id === sourceId);
   const at = cue.start + Math.min(.05, (cue.end - cue.start) / 2);
   pause();
@@ -688,6 +960,12 @@ function renderCaptionStyleEditor() {
   $("captionFocusedContent").hidden = entries.length !== 1;
   if (entries.length === 1 && $("captionFocusedText").value !== entries[0].cue.text)
     $("captionFocusedText").value = entries[0].cue.text;
+  if (entries.length === 1) {
+    $("captionTimeShift").value = entries[0].cue.shift || 0;
+    const placements = mappedCues().filter(c => `${c.sourceId}:${c.index}` === entries[0].key);
+    const active = placements.find(c => c.start <= Number($("fullscreenSeek").value) && c.end > Number($("fullscreenSeek").value)) || placements[0];
+    $("captionTimelineRange").textContent = active ? `成片：${time(active.start)} – ${time(active.end)}` : "此字幕不在当前成片范围内";
+  }
   if (!entries.length || !subtitleStyle) return;
   const styles = entries.map(entry => subtitleStyle.resolvedStyle(entry.cue.style));
   let mixed = false;
@@ -992,13 +1270,9 @@ function tick() {
   $("playheadHandle").setAttribute("aria-valuemax", total());
   $("playheadHandle").setAttribute("aria-valuenow", offset);
   $("playheadHandle").setAttribute("aria-valuetext", time(offset));
-  const cues = (state.project?.subtitles[state.source] || []).filter(
-    (c) => current >= c.start && current < c.end,
-  );
-  if (c) for (const voice of state.project.voiceovers || []) {
-    const at = offset - voice.start;
-    cues.push(...(state.project.subtitles[voice.source_id] || []).filter(cue => cue.start <= at && at < cue.end));
-  }
+  const captionTime = state.outputEndSelected ? Math.max(0, total() - 1 / 30) : offset;
+  const cues = c ? (state.previewCues ||= mappedCues()).filter(cue => cue.start <= captionTime && captionTime < cue.end)
+    : (state.project?.subtitles[state.source] || []).filter(cue => cue.start <= current && current < cue.end);
   renderCaptionPreview(cues);
   requestAnimationFrame(tick);
 }
@@ -1074,7 +1348,7 @@ async function pollJobs() {
   renderJobs();
   updateButtons();
   const latest = await api(`/api/projects/${id}`);
-  if (state.project?.id !== id || state.busy || state.saving) return;
+  if (state.project?.id !== id || state.busy || state.saving || state.captionGesture) return;
   if (latest.revision !== state.project.revision) {
     if (state.dirty) {
       if (state.remoteRevision !== latest.revision) {
@@ -1145,6 +1419,12 @@ $("sourceList").onkeydown = (e) => {
   if (e.key === "Enter") e.target.click();
 };
 $("clipTrack").onclick = (e) => {
+  if (e.target.closest(".spectrogram-status.retry")) {
+    const clip = state.project.clips[Number(e.target.closest("[data-clip]").dataset.clip)];
+    const prefix = `${state.project.id}:${clip.source_id}:`;
+    for (const [key, entry] of state.spectrograms) if (key.startsWith(prefix) && entry.status === "error") state.spectrograms.delete(key);
+    scheduleWaveformDraw(); return;
+  }
   if (e.target.closest(".waveform-status.retry")) {
     const block = e.target.closest("[data-clip]"), clip = state.project.clips[Number(block.dataset.clip)];
     state.waveforms.delete(`${state.project.id}:${clip.source_id}`);
@@ -1286,6 +1566,7 @@ $("video").onerror = () => {
 };
 $("zoom").oninput = () => renderTimeline();
 $("timelineScroll").addEventListener("scroll", scheduleWaveformDraw, {passive: true});
+$("audioView").onchange = (event) => setAudioView(event.target.value);
 for (const [id, delta] of [["timelineZoomOut", -5], ["timelineZoomIn", 5]])
   $(id).onclick = () => {
     $("zoom").value = Math.max(0, Math.min(100, Number($("zoom").value) + delta));
@@ -1396,16 +1677,36 @@ $("subtitleList").onchange = (event) => {
 };
 $("subtitleScope").onchange = renderSubtitles;
 $("captionTrack").onclick = (event) => {
+  if (state.suppressCaptionClick) return;
   const block = event.target.closest("[data-caption-occurrence]");
-  if (block) openTimelineCaption(block.dataset.captionOccurrence);
+  if (!block) return;
+  if (event.ctrlKey || event.metaKey || event.shiftKey) selectTimelineCaption(block, event);
+  else openTimelineCaption(block.dataset.captionOccurrence);
 };
 $("captionTrack").onkeydown = (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+    event.preventDefault(); event.stopPropagation();
+    state.subtitleSelection = new Set(mappedCues().map(c => `${c.sourceId}:${c.index}`));
+    renderSubtitles(); return;
+  }
   if (event.key !== "Enter" && event.code !== "Space") return;
   const block = event.target.closest("[data-caption-occurrence]");
   if (!block) return;
   event.preventDefault();
   event.stopPropagation();
   openTimelineCaption(block.dataset.captionOccurrence);
+};
+$("captionTrack").addEventListener("pointerdown", startCaptionGesture);
+$("captionTrack").addEventListener("lostpointercapture", (event) => finishCaptionGesture(event, true));
+$("captionTrack").ondragstart = event => event.preventDefault();
+document.addEventListener("pointermove", moveCaptionGesture);
+document.addEventListener("pointerup", finishCaptionGesture);
+document.addEventListener("pointercancel", finishCaptionGesture);
+window.addEventListener("blur", () => finishCaptionGesture(null, true));
+$("captionTimeShift").onchange = event => {
+  const context = captionMoveContext(), value = Number(event.target.value);
+  if (!context || context.entries.length !== 1 || !event.target.value || !Number.isFinite(value)) return;
+  commitCaptionMove(context, Math.max(context.minimum, Math.min(context.maximum, value - context.entries[0].shift)));
 };
 $("captionFocusedText").oninput = (event) => {
   const entries = selectedSubtitleEntries();
@@ -1497,10 +1798,24 @@ $("transcribeBtn").onclick = async () => {
     toast(e.message, true);
   }
 };
+const exportOptionsReady = import("/static/export-options.js");
+function selectedExportOptions() {
+  return { fps: Number($("exportFps").value), resolution: $("exportResolution").value, quality: $("exportQuality").value };
+}
+async function updateExportEstimate() {
+  const { exportProfile } = await exportOptionsReady;
+  const source = state.project?.sources.find(s => s.id === state.project.clips[0]?.source_id);
+  if (!source) return;
+  const p = exportProfile(source, selectedExportOptions());
+  const mb = Math.round(total() * (p.bitrate + p.audioBitrate) / 8 / 1000);
+  $("exportEstimate").textContent = `${p.width} × ${p.height} · ${p.fps} 帧/秒 · 参考大小约 ${mb} MB（实际随画面复杂度变化）`;
+}
+for (const id of ["exportFps", "exportResolution", "exportQuality"]) $(id).onchange = updateExportEstimate;
 $("exportBtn").onclick = async () => {
   try {
     await saveProject();
     $("exportDuration").textContent = time(total());
+    await updateExportEstimate();
     $("exportDialog").showModal();
   } catch (e) {
     toast(e.message, true);
@@ -1510,6 +1825,7 @@ $("confirmExport").onclick = async () => {
   try {
     const job = await api(`/api/projects/${state.project.id}/export`, "POST", {
       burn_subtitles: $("burnCaptions").checked,
+      ...selectedExportOptions(),
     });
     $("exportDialog").close();
     state.jobs.unshift(job);
@@ -1520,6 +1836,7 @@ $("confirmExport").onclick = async () => {
   }
 };
 function handleEditorKeydown(e) {
+  if (e.key === "Escape" && state.captionGesture) { e.preventDefault(); finishCaptionGesture(null, true); return; }
   if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.isComposing && !$("exportDialog").open &&
       ["z", "y"].includes(e.key.toLowerCase())) {
     e.preventDefault();
@@ -1620,6 +1937,7 @@ async function health() {
 (async () => {
   try {
     await Promise.all([subtitleStyleReady, editHistoryReady]);
+    setAudioView(localStorage.getItem("cutccc-audio-view") || "waveform");
     await health();
     await projectOptions();
     const id = localStorage.getItem("cutccc-project");

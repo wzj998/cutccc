@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { capture } from "./processes.js";
 import { toAss } from "./subtitle-ass.js";
+import { exportProfile } from "../web/export-options.js";
 import {
   APIError,
   clipFrames,
@@ -51,6 +52,7 @@ export async function probe(file) {
     duration,
     width,
     height,
+    fps: (() => { const [n, d] = (video.avg_frame_rate || "0/1").split("/").map(Number); return d ? n / d : 0; })(),
     has_audio: data.streams.some((s) => s.codec_type === "audio"),
   };
 }
@@ -116,6 +118,7 @@ export async function render(
   sourcePath,
   runProcess,
   burnSubtitles = true,
+  options = {},
 ) {
   const clips = project.clips,
     sources = new Map(project.sources.map((s) => [s.id, s]));
@@ -130,10 +133,8 @@ export async function render(
   const voices = project.voiceovers || [];
   const audibleVoices = voices.filter(v => (v.volume ?? 1) > 0);
   validateVoiceovers(project.sources, clips, voices);
-  const first = sources.get(clips[0].source_id),
-    scale = Math.min(1, 1920 / Math.max(first.width, first.height));
-  const width = Math.max(2, Math.round((first.width * scale) / 2) * 2),
-    height = Math.max(2, Math.round((first.height * scale) / 2) * 2);
+  const profile = exportProfile(sources.get(clips[0].source_id), options);
+  const { width, height, fps } = profile;
   const args = ["-nostdin", "-v", "error", "-y"],
     filters = [];
   for (const [i, c] of clips.entries()) {
@@ -146,10 +147,10 @@ export async function render(
       "-i",
       await sourcePath(c.source_id),
     );
-    const frames = clipFrames(c),
-      duration = frames / FPS;
+    const frames = clipFrames(c) * fps / FPS,
+      duration = clipFrames(c) / FPS;
     filters.push(
-      `[${i}:v:0]trim=start=0:end=${c.end - c.start},setpts=PTS-STARTPTS,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${FPS},tpad=stop_mode=clone:stop_duration=1,trim=end_frame=${frames},setpts=PTS-STARTPTS[v${i}]`,
+      `[${i}:v:0]trim=start=0:end=${c.end - c.start},setpts=PTS-STARTPTS,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},tpad=stop_mode=clone:stop_duration=1,trim=end_frame=${frames},setpts=PTS-STARTPTS[v${i}]`,
     );
     if (sources.get(c.source_id).has_audio)
       filters.push(
@@ -209,11 +210,12 @@ export async function render(
           "-rc",
           "vbr",
           "-cq",
-          "20",
+          String(profile.cq),
           "-b:v",
-          "0",
+          `${profile.bitrate}k`,
         ]
-      : ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"];
+      : ["-c:v", "libx264", "-preset", "medium", "-crf", String(profile.cq)];
+  encoding.push("-maxrate", `${profile.maxrate}k`, "-bufsize", `${profile.maxrate * 2}k`);
   args.push(
     "-filter_complex_script",
     "filters.txt",
@@ -222,7 +224,7 @@ export async function render(
     "-map",
     audio,
     "-frames:v",
-    String(clips.reduce((n, c) => n + clipFrames(c), 0)),
+    String(clips.reduce((n, c) => n + clipFrames(c), 0) * fps / FPS),
     "-t",
     String(outputDuration(clips)),
     ...encoding,
@@ -231,7 +233,7 @@ export async function render(
     "-c:a",
     "aac",
     "-b:a",
-    "192k",
+    `${profile.audioBitrate}k`,
     "-movflags",
     "+faststart",
     "-progress",
@@ -246,6 +248,8 @@ export async function render(
     duration: result.duration,
     width: result.width,
     height: result.height,
+    fps: result.fps,
+    export_options: profile,
     subtitle_count: cues.length,
     project_revision: project.revision,
   };

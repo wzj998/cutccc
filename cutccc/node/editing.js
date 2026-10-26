@@ -75,6 +75,8 @@ export function validateEdit(sources, clips, subtitles) {
       )
         fail("Subtitle text must contain 1–1000 characters");
       previous = c.end;
+      if (c.shift !== undefined && (!finite(c.shift) || Math.abs(c.shift) > 86400))
+        fail("Subtitle timeline shift must be within -86400 and 86400 seconds");
       try { validateStyle(c.style); } catch (error) { fail(error.message); }
     }
   }
@@ -109,6 +111,7 @@ export function mapSubtitles(clips, subtitles, voiceovers = [], sources = []) {
           end: millis(offset + end - clip.start),
           text: c.text,
           ...(c.style === undefined ? {} : { style: structuredClone(c.style) }),
+          ...(c.shift === undefined ? {} : {shift: c.shift}),
         });
     }
     offset += duration;
@@ -121,10 +124,13 @@ export function mapSubtitles(clips, subtitles, voiceovers = [], sources = []) {
       if (end - start >= .001) cues.push({
         start: millis(voice.start + start), end: millis(voice.start + end), text: cue.text,
         ...(cue.style === undefined ? {} : {style: structuredClone(cue.style)}),
+        ...(cue.shift === undefined ? {} : {shift: cue.shift}),
       });
     }
   }
-  return cues.sort((a, b) => a.start - b.start);
+  return cues.map(({shift = 0, ...cue}) => ({...cue,
+    start: millis(Math.max(0, cue.start + shift)), end: millis(Math.min(offset, cue.end + shift)),
+  })).filter(cue => cue.end > cue.start).sort((a, b) => a.start - b.start);
 }
 export function timestamp(seconds) {
   if (!finite(seconds) || seconds < 0)

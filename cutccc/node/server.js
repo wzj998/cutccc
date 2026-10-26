@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { APIError, fail } from "./editing.js";
 import { validateModels } from "./media.js";
 import { Studio } from "./studio.js";
+import { exportSchema } from "../web/export-options.js";
 
 const WEB = fileURLToPath(new URL("../web/", import.meta.url));
 const SECURITY = {
@@ -68,7 +69,7 @@ function editBody(b) {
   for (const cues of Object.values(b.subtitles)) {
     if (!Array.isArray(cues)) fail("Subtitle cues must be arrays", 422);
     for (const c of cues)
-      object(c, ["start", "end", "text", "style"], ["start", "end", "text"]);
+      object(c, ["start", "end", "text", "style", "shift"], ["start", "end", "text"]);
   }
   if (b.voiceovers !== undefined && b.voiceovers !== null) {
     if (!Array.isArray(b.voiceovers)) fail("voiceovers must be an array", 422);
@@ -234,9 +235,11 @@ const ROUTES = [
   ["patch", "/api/projects/{id}", "保存剪辑、字幕和旁白"],
   ["post", "/api/projects/{id}/sources/import", "导入本机视频"],
   ["post", "/api/projects/{id}/sources/upload", "上传单个视频"],
+  ["delete", "/api/projects/{id}/sources/{source_id}", "移除未使用的素材引用，保留磁盘文件"],
   ["get", "/api/projects/{id}/sources/{source_id}/media", "兼容预览媒体"],
   ["get", "/api/projects/{id}/sources/{source_id}/poster", "素材缩略图"],
   ["get", "/api/projects/{id}/sources/{source_id}/waveform", "原素材音频波形（自动缓存）"],
+  ["get", "/api/projects/{id}/sources/{source_id}/spectrogram", "频谱PNG，tile=overview或20秒分块序号"],
   ["post", "/api/projects/{id}/transcribe", "排队生成字幕"],
   ["post", "/api/projects/{id}/export", "排队导出快照"],
   ["get", "/api/projects/{id}/jobs", "列出项目任务"],
@@ -264,6 +267,7 @@ export function openapi() {
       [],
     ),
     ImportPath: schema({ path: { type: "string", minLength: 1 } }, ["path"]),
+    RemoveSource: schema({revision: {type: "integer", minimum: 1}}, ["revision"]),
     Clip: schema({ source_id: str, start: number, end: number }, [
       "source_id",
       "start",
@@ -280,7 +284,7 @@ export function openapi() {
       marginX: {type: "number", minimum: 0, maximum: 40},
       marginY: {type: "number", minimum: 0, maximum: 40},
     }, []),
-    Subtitle: schema({ start: number, end: number, text: str, style: ref("SubtitleStyle") }, [
+    Subtitle: schema({ start: number, end: number, text: str, style: ref("SubtitleStyle"), shift: {type: "number", minimum: -86400, maximum: 86400, default: 0} }, [
       "start",
       "end",
       "text",
@@ -326,7 +330,7 @@ export function openapi() {
       },
       ["source_id"],
     ),
-    Export: schema({ burn_subtitles: { type: "boolean", default: true } }, []),
+    Export: schema({ burn_subtitles: { type: "boolean", default: true }, ...exportSchema }, []),
   };
   const paths = {};
   for (const [method, url, summary] of ROUTES) {
@@ -344,9 +348,9 @@ export function openapi() {
         409: { description: "Revision conflict" },
       },
     };
-    if (method === "post" || method === "patch") {
+    if (method === "post" || method === "patch" || method === "delete") {
       const name =
-        method === "patch"
+        method === "delete" ? "RemoveSource" : method === "patch"
           ? "Edit"
           : url === "/api/projects"
             ? "NewProject"
@@ -424,6 +428,7 @@ export async function startServer(options = {}) {
             "app.js",
             "subtitle-style.js",
             "edit-history.js",
+            "export-options.js",
             "style.css",
             "api-docs.js",
           ].includes(name)
@@ -495,9 +500,21 @@ export async function startServer(options = {}) {
           }
           return;
         }
+        const removeSource = /^sources\/([^/]+)$/.exec(rest || "");
+        if (removeSource && method === "DELETE") {
+          const b = object(await body(req), ["revision"], ["revision"]);
+          if (!Number.isInteger(b.revision) || b.revision < 1) fail("revision must be a positive integer", 422);
+          json(res, 200, await studio.removeSource(id, removeSource[1], b.revision));
+          return;
+        }
         const waveform = /^sources\/([^/]+)\/waveform$/.exec(rest || "");
         if (waveform && method === "GET") {
           json(res, 200, await studio.waveform(id, waveform[1]));
+          return;
+        }
+        const spectrum = /^sources\/([^/]+)\/spectrogram$/.exec(rest || "");
+        if (spectrum && (method === "GET" || method === "HEAD")) {
+          await sendFile(req, res, await studio.spectrogram(id, spectrum[1], url.searchParams.get("tile") ?? "overview"));
           return;
         }
         const media = /^sources\/([^/]+)\/(media|poster)$/.exec(rest || "");
@@ -526,7 +543,7 @@ export async function startServer(options = {}) {
           return;
         }
         if (rest === "export" && method === "POST") {
-          const b = object(await body(req), ["burn_subtitles"]);
+          const b = object(await body(req), ["burn_subtitles", ...Object.keys(exportSchema)]);
           if (
             b.burn_subtitles !== undefined &&
             typeof b.burn_subtitles !== "boolean"

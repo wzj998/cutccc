@@ -559,6 +559,8 @@ kbd {
 .caption-style-editor summary { cursor: pointer; font-size: 11px; }
 .caption-focused-content { display: block; margin-top: 10px; font-size: 10px; color: var(--muted); }
 .caption-focused-content textarea { display: block; width: 100%; margin-top: 5px; resize: vertical; min-height: 58px; }
+.caption-shift-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 7px; }
+.caption-shift-field input { width: 95px; padding: 5px; }
 .caption-style-editor p { font-size: 10px; margin: 9px 0; }
 .caption-style-editor fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .caption-style-editor fieldset:disabled { opacity: .4; }
@@ -571,6 +573,8 @@ kbd {
 .subtitle-select-line span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; }
 .subtitle-select-line input { accent-color: var(--accent); }
 .subtitle-select-line button { padding: 3px 6px; }
+.subtitle-placement { font: 10px Consolas, monospace; color: var(--accent); margin: 5px 0; }
+.subtitle-clock-label { font-size: 9px; color: var(--muted); margin: 4px 0; }
 .drop-overlay {
   position: absolute;
   inset: 16px;
@@ -615,7 +619,7 @@ kbd {
   vertical-align: middle;
 }
 .timeline-panel {
-  height: calc(268px + var(--caption-extra-height, 0px));
+  height: calc(272px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
   flex-shrink: 0;
   background: #171b1d;
   border-top: 1px solid var(--line);
@@ -644,6 +648,9 @@ kbd {
 .timeline-actions {
   gap: 8px !important;
 }
+.audio-view-toolbar { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 22px 5px; font-size: 10px; }
+.audio-view-toolbar select { padding: 3px 6px; font-size: 10px; }
+.audio-view-toolbar .muted { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .zoom-control {
   color: #899699;
   display: flex;
@@ -658,7 +665,7 @@ kbd {
   padding: 0;
 }
 .timeline-scroll {
-  height: calc(173px + var(--caption-extra-height, 0px));
+  height: calc(145px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
   overflow-x: auto;
   overflow-y: hidden;
   margin-left: 22px;
@@ -668,7 +675,7 @@ kbd {
 .timeline-canvas {
   position: relative;
   min-width: 100%;
-  height: calc(163px + var(--caption-extra-height, 0px));
+  height: calc(135px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
 }
 .ruler {
   height: 26px;
@@ -706,13 +713,13 @@ kbd {
   background: #414b4e;
 }
 .clip-track {
-  height: 94px;
+  height: calc(66px + var(--clip-audio-height, 28px));
   display: flex;
   position: relative;
   padding-top: 7px;
 }
 .timeline-clip {
-  height: 83px;
+  height: calc(55px + var(--clip-audio-height, 28px));
   border: 0;
   min-width: 0;
   flex-shrink: 0;
@@ -758,7 +765,7 @@ kbd {
 }
 .timeline-clip small {
   position: absolute;
-  bottom: 35px;
+  bottom: calc(7px + var(--clip-audio-height, 28px));
   left: 8px;
   white-space: nowrap;
   font:
@@ -769,6 +776,13 @@ kbd {
 .clip-waveform { position: absolute; bottom: 0; height: 28px; pointer-events: none; }
 .timeline-clip .waveform-status { bottom: 5px; left: 8px; font-size: 9px; color: #a4b9b3; pointer-events: none; }
 .timeline-clip .waveform-status.retry { pointer-events: auto; cursor: pointer; color: #ffd3a0; }
+.clip-spectrogram { position: absolute; bottom: 0; height: 84px; pointer-events: none; }
+.timeline-clip .spectrogram-status { bottom: 5px; left: 45px; font-size: 9px; color: #ddd; background: #0b0818b0; pointer-events: none; }
+.timeline-clip .spectrogram-status.retry { pointer-events: auto; cursor: pointer; color: #ffd3a0; }
+[data-audio-view="waveform"] .clip-spectrogram, [data-audio-view="waveform"] .spectrogram-status { display: none; }
+[data-audio-view="spectrogram"] .clip-waveform, [data-audio-view="spectrogram"] .waveform-status { display: none; }
+[data-audio-view="both"] .clip-spectrogram { bottom: 28px; }
+[data-audio-view="both"] .spectrogram-status { bottom: 33px; }
 .timeline-placeholder {
   font-size: 11px;
   color: #69777a;
@@ -777,6 +791,8 @@ kbd {
   padding-top: 24px;
 }
 .caption-track {
+  touch-action: none;
+  user-select: none;
   height: calc(29px + var(--caption-extra-height, 0px));
   margin-top: 7px;
   position: relative;
@@ -786,7 +802,7 @@ kbd {
   overflow-y: auto;
 }
 .caption-block {
-  cursor: pointer;
+  cursor: grab;
   position: absolute;
   height: 22px;
   top: 3px;
@@ -803,6 +819,9 @@ kbd {
 }
 .caption-block:hover, .caption-block:focus-visible { background: #52566d; outline: 1px solid #c4c2ee; outline-offset: -1px; }
 .caption-block.selected { background: #365744; border-left-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.caption-block.dragging { cursor: grabbing; opacity: .8; z-index: 4; }
+.caption-selection-box { position: absolute; border: 1px solid var(--accent); background: #aff2bd22; pointer-events: none; z-index: 5; }
+.caption-move-label { position: fixed; padding: 6px 9px; border-radius: 5px; background: #18251fee; color: var(--accent); font: 11px monospace; pointer-events: none; z-index: 30; }
 .playhead {
   position: absolute;
   left: 0;
@@ -1190,10 +1209,10 @@ dialog p {
     grid-template-columns: 270px minmax(600px, 1fr) 340px;
   }
   .timeline-panel {
-    height: calc(293px + var(--caption-extra-height, 0px));
+    height: calc(297px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
   }
   .timeline-scroll {
-    height: calc(198px + var(--caption-extra-height, 0px));
+    height: calc(170px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
   }
   .welcome {
     max-width: 520px;
@@ -1306,10 +1325,10 @@ dialog p {
     display: none;
   }
   .timeline-panel {
-    height: calc(238px + var(--caption-extra-height, 0px));
+    height: calc(242px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
   }
   .timeline-scroll {
-    height: calc(173px + var(--caption-extra-height, 0px));
+    height: calc(145px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
   }
   .timeline-footer {
     display: none;
@@ -1340,3 +1359,6 @@ dialog p {
     font-size: 10px;
   }
 }
+.export-settings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.export-settings label { display: grid; gap: 8px; font-size: 12px; }
+.export-settings select { width: 100%; min-width: 0; }
