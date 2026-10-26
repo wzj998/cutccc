@@ -30,6 +30,8 @@ const state = {
   subtitleSelection: new Set(),
   subtitleSelectionProject: null,
   captionRenderKey: null,
+  waveforms: new Map(),
+  waveformDrawQueued: false,
 };
 const esc = (value) =>
   String(value ?? "").replace(
@@ -218,6 +220,7 @@ async function loadProject(id, confirmChanges = true) {
   }
   pause();
   state.project = await api(`/api/projects/${id}`);
+  state.waveforms.clear();
   state.clip = state.project.clips.length ? 0 : -1;
   state.source = selected()?.source_id || state.project.sources[0]?.id || null;
   state.jobs = [];
@@ -531,7 +534,7 @@ function renderTimeline() {
     ? p.clips
         .map((c, i) => {
           const s = p.sources.find((s) => s.id === c.source_id);
-          return `<div class="timeline-clip ${i === state.clip ? "selected" : ""}" data-clip="${i}" draggable="true" role="button" tabindex="0" aria-label="片段 ${i + 1}：${esc(s.name)}" style="width:${duration(c) * state.zoom}px"><img src="${mediaUrl(c.source_id, "poster")}" alt=""><span>${i + 1} · ${esc(s.name)}</span><small>${time(duration(c))}</small></div>`;
+          return `<div class="timeline-clip ${i === state.clip ? "selected" : ""}" data-clip="${i}" draggable="true" role="button" tabindex="0" aria-label="片段 ${i + 1}：${esc(s.name)}" style="width:${duration(c) * state.zoom}px"><img src="${mediaUrl(c.source_id, "poster")}" alt=""><span>${i + 1} · ${esc(s.name)}</span><small>${time(duration(c))}</small><canvas class="clip-waveform" aria-hidden="true"></canvas><small class="waveform-status">${s.has_audio ? "生成波形中…" : "无音轨"}</small></div>`;
         })
         .join("")
     : '<div class="timeline-placeholder">导入视频后，片段将出现在这里</div>';
@@ -555,6 +558,71 @@ function renderTimeline() {
   const anchor = playheadX >= 0 && playheadX <= viewportWidth ? playheadX : viewportWidth / 2;
   scroll.scrollLeft = zoom === 0 ? 0 : Math.abs(previousZoom - state.zoom) > .000001
     ? playheadTime * state.zoom - anchor : previousTime * state.zoom;
+  ensureWaveforms();
+  scheduleWaveformDraw();
+}
+function ensureWaveforms() {
+  const project = state.project;
+  if (!project) return;
+  for (const id of new Set(project.clips.map(clip => clip.source_id))) {
+    if (!project.sources.find(source => source.id === id)?.has_audio) continue;
+    const key = `${project.id}:${id}`;
+    if (state.waveforms.has(key)) continue;
+    const entry = {status: "loading", data: null};
+    state.waveforms.set(key, entry);
+    api(`/api/projects/${project.id}/sources/${id}/waveform`).then(data => {
+      entry.data = data; entry.status = "ready";
+    }).catch(error => { entry.status = "error"; entry.error = error.message; }).finally(() => {
+      if (state.project?.id === project.id && state.waveforms.get(key) === entry) scheduleWaveformDraw();
+    });
+  }
+}
+function scheduleWaveformDraw() {
+  if (state.waveformDrawQueued) return;
+  state.waveformDrawQueued = true;
+  requestAnimationFrame(() => { state.waveformDrawQueued = false; drawClipWaveforms(); });
+}
+function drawClipWaveforms() {
+  if (!state.project) return;
+  const scroll = $("timelineScroll"), bounds = scroll.getBoundingClientRect();
+  const viewportLeft = bounds.left + scroll.clientLeft, viewportRight = viewportLeft + scroll.clientWidth;
+  const ratio = Math.min(2, window.devicePixelRatio || 1), height = 28;
+  for (const block of $("clipTrack").querySelectorAll("[data-clip]")) {
+    const clip = state.project.clips[Number(block.dataset.clip)];
+    if (!clip) continue;
+    const source = state.project.sources.find(source => source.id === clip.source_id);
+    const canvas = block.querySelector("canvas"), status = block.querySelector(".waveform-status");
+    const entry = state.waveforms.get(`${state.project.id}:${clip.source_id}`), data = entry?.data;
+    status.textContent = !source.has_audio ? "无音轨" : entry?.status === "error" ? "波形不可用，点击重试"
+      : entry?.status !== "ready" ? "生成波形中…" : data.peak_max < .0001 ? "静音" : "";
+    status.hidden = !status.textContent;
+    status.classList.toggle("retry", entry?.status === "error");
+    status.title = entry?.status === "error" ? entry.error : "原素材音频波形";
+    const rect = block.getBoundingClientRect();
+    const left = Math.max(0, viewportLeft - rect.left), right = Math.min(rect.width, viewportRight - rect.left);
+    canvas.hidden = right <= left;
+    if (canvas.hidden) continue;
+    const width = Math.ceil(right - left);
+    canvas.style.left = `${left}px`; canvas.style.width = `${width}px`;
+    canvas.width = Math.ceil(width * ratio); canvas.height = Math.ceil(height * ratio);
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.fillStyle = "#0d1c1ce6"; ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = "#45615f"; ctx.fillRect(0, height / 2, width, .6);
+    if (!source.has_audio || !data?.peaks.length) continue;
+    const rate = data.peaks_per_second, gain = 1 / Math.max(.02, data.peak_max);
+    for (let x = 0; x < width; x += 2) {
+      const start = Math.max(0, Math.floor((clip.start + (left + x) / state.zoom) * rate));
+      const end = Math.min(data.peaks.length, Math.ceil(Math.min(clip.end, clip.start + (left + x + 2) / state.zoom) * rate));
+      let peak = 0, rms = 0;
+      for (let i = start; i < end; i++) { peak = Math.max(peak, data.peaks[i]); rms = Math.max(rms, data.rms[i]); }
+      // Compress the display range so quiet speech remains visible next to loud transients.
+      const outer = Math.sqrt(Math.min(1, peak * gain)) * 12;
+      const inner = Math.sqrt(Math.min(1, rms * gain)) * 12;
+      ctx.fillStyle = "#80cbd0a8"; ctx.fillRect(x, height / 2 - outer, 1.5, outer * 2);
+      ctx.fillStyle = "#aff2bd"; ctx.fillRect(x, height / 2 - inner, 1.5, inner * 2);
+    }
+  }
 }
 function renderSubtitles() {
   const entries = subtitleEntries();
@@ -1077,6 +1145,11 @@ $("sourceList").onkeydown = (e) => {
   if (e.key === "Enter") e.target.click();
 };
 $("clipTrack").onclick = (e) => {
+  if (e.target.closest(".waveform-status.retry")) {
+    const block = e.target.closest("[data-clip]"), clip = state.project.clips[Number(block.dataset.clip)];
+    state.waveforms.delete(`${state.project.id}:${clip.source_id}`);
+    ensureWaveforms(); scheduleWaveformDraw(); return;
+  }
   const clip = e.target.closest("[data-clip]");
   if (!clip) return;
   const index = Number(clip.dataset.clip),
@@ -1212,6 +1285,7 @@ $("video").onerror = () => {
   toast("浏览器无法预览当前编码。可以继续设置剪辑范围并导出兼容的 MP4。", true);
 };
 $("zoom").oninput = () => renderTimeline();
+$("timelineScroll").addEventListener("scroll", scheduleWaveformDraw, {passive: true});
 for (const [id, delta] of [["timelineZoomOut", -5], ["timelineZoomIn", 5]])
   $(id).onclick = () => {
     $("zoom").value = Math.max(0, Math.min(100, Number($("zoom").value) + delta));

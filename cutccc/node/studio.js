@@ -21,6 +21,7 @@ import {
   validateModels,
 } from "./media.js";
 import { launch, stopProcess } from "./processes.js";
+import { generateWaveform, WAVEFORM_VERSION } from "./waveform.js";
 
 const uuid = () => randomUUID().replaceAll("-", "");
 const now = () => Date.now() / 1000;
@@ -57,6 +58,8 @@ export class Studio {
     studio.mutation = Promise.resolve();
     studio.queue = Promise.resolve();
     studio.processes = new Set();
+    studio.waveformTasks = new Map();
+    studio.waveformQueue = Promise.resolve();
     await fs.mkdir(studio.root, { recursive: true });
     await studio.acquireLock();
     try {
@@ -335,6 +338,36 @@ export class Studio {
       );
       return this.save(p);
     });
+  }
+  async waveform(id, sid) {
+    if (this.closed) throw new APIError("Server is shutting down", 503);
+    const file = await this.sourcePath(id, sid);
+    const project = await this.getProject(id), source = project.sources.find(s => s.id === sid);
+    const stat = await fs.stat(file);
+    const fingerprint = `${stat.size}:${stat.mtimeMs}:${source.duration}:${source.has_audio}`;
+    const folder = this.projectDir(id, "waveforms"), cache = path.join(folder, sid + ".json");
+    try {
+      const data = JSON.parse(await fs.readFile(cache, "utf8"));
+      if (data?.version === WAVEFORM_VERSION && data.fingerprint === fingerprint &&
+          Number.isFinite(data.peaks_per_second) && data.peaks_per_second > 0 &&
+          Array.isArray(data.peaks) && Array.isArray(data.rms) && data.peaks.length === data.rms.length) return data;
+    } catch (error) {
+      if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+    }
+    const key = `${id}:${sid}:${fingerprint}`;
+    if (this.waveformTasks.has(key)) return this.waveformTasks.get(key);
+    const task = this.waveformQueue.then(async () => {
+      if (this.closed) throw new APIError("Server is shutting down", 503);
+      const data = source.has_audio ? await generateWaveform(file, source.duration, this.processes)
+        : {version: WAVEFORM_VERSION, sample_rate: 8000, peaks_per_second: 100, audio_duration: 0, peak_max: 0, peaks: [], rms: []};
+      const result = {...data, source_id: sid, duration: source.duration, has_audio: source.has_audio, fingerprint};
+      await fs.mkdir(folder, {recursive: true});
+      await this.write(cache, result);
+      return result;
+    });
+    this.waveformTasks.set(key, task);
+    this.waveformQueue = task.catch(() => {});
+    try { return await task; } finally { this.waveformTasks.delete(key); }
   }
   getJob(id) {
     return this.read(this.jobDir(id, "job.json"));
@@ -618,6 +651,7 @@ export class Studio {
     this.closed = true;
     await Promise.allSettled([...this.processes].map(stopProcess));
     await this.queue;
+    await this.waveformQueue;
     for (const j of await this.allJobs())
       if (["queued", "running"].includes(j.status))
         await this.updateJob(j.id, {

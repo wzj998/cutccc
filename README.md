@@ -51,6 +51,7 @@ node cutccc/node/cli.js serve --port 18765 --data-dir E:/video-work/studio --mod
 - 全屏播放按钮和进度条在鼠标移至屏幕底部时显示，移开或点击画面其他区域时隐藏；拖动期间保持可见，键盘 `Tab` 可调出控制栏。
 - 将时间轴缩放条拉到最左端可显示完整成片；刻度和最小缩放随片长及窗口宽度自动调整。
 - 时间轴缩放以播放头为锚点；播放头在可视区外时会移回可视区。时间轴、普通预览和全屏预览的加减号均可点击缩放。
+- 影片块底部显示真实原音轨的峰值 / RMS 波形，随片段裁切、重复、重排、缩放和滚动对齐；无音轨及静音有明确标记。首次由 FFmpeg 提取，之后复用工程目录内的波形缓存，仅绘制可视范围，不改变工程和导出。
 - 每条字幕可单独设置字体、字号、颜色、粗体、斜体、描边、九宫格位置和边距。点击字幕的“样式”可定位预览；勾选多条可批量修改单个属性，列表可切换到整个工程跨素材选择。
 - 点击时间轴上的字幕块，可定位到该次出现的位置并打开对应内容和样式编辑；旁白、跨片段和重复使用的字幕均支持。重叠字幕分行显示，字幕块也支持 `Enter` / 空格打开。
 - “应用到工程全部字幕”复制第一条所选字幕的完整样式；“恢复默认”仅重置所选字幕。样式随工程保存，预览和导出使用同一套位置及字号比例。
@@ -87,6 +88,7 @@ Node 服务对数据目录加单实例锁；任务串行执行。保存时版本
 | POST | `/api/projects/{id}/sources/upload` | 流式上传一个文件，multipart 字段 `file` |
 | GET | `/api/projects/{id}/sources/{source_id}/media` | 媒体预览，支持 Range / HEAD |
 | GET | `/api/projects/{id}/sources/{source_id}/poster` | 缩略图 |
+| GET | `/api/projects/{id}/sources/{source_id}/waveform` | 原素材音频峰值与 RMS 波形，自动缓存 |
 | POST | `/api/projects/{id}/transcribe` | 排队识别字幕，字段 `source_id` |
 | POST | `/api/projects/{id}/export` | 排队导出，字段 `burn_subtitles` |
 | GET | `/api/projects/{id}/jobs` | 项目任务列表 |

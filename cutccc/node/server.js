@@ -236,6 +236,7 @@ const ROUTES = [
   ["post", "/api/projects/{id}/sources/upload", "上传单个视频"],
   ["get", "/api/projects/{id}/sources/{source_id}/media", "兼容预览媒体"],
   ["get", "/api/projects/{id}/sources/{source_id}/poster", "素材缩略图"],
+  ["get", "/api/projects/{id}/sources/{source_id}/waveform", "原素材音频波形（自动缓存）"],
   ["post", "/api/projects/{id}/transcribe", "排队生成字幕"],
   ["post", "/api/projects/{id}/export", "排队导出快照"],
   ["get", "/api/projects/{id}/jobs", "列出项目任务"],
@@ -492,6 +493,11 @@ export async function startServer(options = {}) {
           } finally {
             await fs.unlink(file.temp).catch(() => {});
           }
+          return;
+        }
+        const waveform = /^sources\/([^/]+)\/waveform$/.exec(rest || "");
+        if (waveform && method === "GET") {
+          json(res, 200, await studio.waveform(id, waveform[1]));
           return;
         }
         const media = /^sources\/([^/]+)\/(media|poster)$/.exec(rest || "");

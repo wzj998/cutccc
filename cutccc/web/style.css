@@ -615,7 +615,7 @@ kbd {
   vertical-align: middle;
 }
 .timeline-panel {
-  height: calc(240px + var(--caption-extra-height, 0px));
+  height: calc(268px + var(--caption-extra-height, 0px));
   flex-shrink: 0;
   background: #171b1d;
   border-top: 1px solid var(--line);
@@ -658,7 +658,7 @@ kbd {
   padding: 0;
 }
 .timeline-scroll {
-  height: calc(145px + var(--caption-extra-height, 0px));
+  height: calc(173px + var(--caption-extra-height, 0px));
   overflow-x: auto;
   overflow-y: hidden;
   margin-left: 22px;
@@ -668,7 +668,7 @@ kbd {
 .timeline-canvas {
   position: relative;
   min-width: 100%;
-  height: calc(135px + var(--caption-extra-height, 0px));
+  height: calc(163px + var(--caption-extra-height, 0px));
 }
 .ruler {
   height: 26px;
@@ -706,13 +706,13 @@ kbd {
   background: #414b4e;
 }
 .clip-track {
-  height: 66px;
+  height: 94px;
   display: flex;
   position: relative;
   padding-top: 7px;
 }
 .timeline-clip {
-  height: 55px;
+  height: 83px;
   border: 0;
   min-width: 0;
   flex-shrink: 0;
@@ -758,7 +758,7 @@ kbd {
 }
 .timeline-clip small {
   position: absolute;
-  bottom: 7px;
+  bottom: 35px;
   left: 8px;
   white-space: nowrap;
   font:
@@ -766,6 +766,9 @@ kbd {
     monospace;
   color: #c2dad1;
 }
+.clip-waveform { position: absolute; bottom: 0; height: 28px; pointer-events: none; }
+.timeline-clip .waveform-status { bottom: 5px; left: 8px; font-size: 9px; color: #a4b9b3; pointer-events: none; }
+.timeline-clip .waveform-status.retry { pointer-events: auto; cursor: pointer; color: #ffd3a0; }
 .timeline-placeholder {
   font-size: 11px;
   color: #69777a;
@@ -1187,10 +1190,10 @@ dialog p {
     grid-template-columns: 270px minmax(600px, 1fr) 340px;
   }
   .timeline-panel {
-    height: calc(265px + var(--caption-extra-height, 0px));
+    height: calc(293px + var(--caption-extra-height, 0px));
   }
   .timeline-scroll {
-    height: calc(170px + var(--caption-extra-height, 0px));
+    height: calc(198px + var(--caption-extra-height, 0px));
   }
   .welcome {
     max-width: 520px;
@@ -1303,10 +1306,10 @@ dialog p {
     display: none;
   }
   .timeline-panel {
-    height: calc(210px + var(--caption-extra-height, 0px));
+    height: calc(238px + var(--caption-extra-height, 0px));
   }
   .timeline-scroll {
-    height: calc(145px + var(--caption-extra-height, 0px));
+    height: calc(173px + var(--caption-extra-height, 0px));
   }
   .timeline-footer {
     display: none;

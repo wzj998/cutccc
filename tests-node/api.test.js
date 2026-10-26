@@ -424,6 +424,44 @@ test("styled subtitles persist, export to ASS and render at independent position
   assert.equal((await fetch(f.url + "/static/subtitle-style.js")).status, 200);
 });
 
+test("waveform API extracts real audio once, caches it and preserves the project", {skip: !hasFFmpeg}, async (t) => {
+  const f = await fixture(t);
+  let p = await f.studio.createProject("Waveform cache");
+  const file = path.join(f.root, "signal.mp4");
+  await capture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=black:s=160x90:r=30:d=1",
+    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=8000:duration=1",
+    "-af", "volume=0:enable='lt(t,0.5)'", "-c:v", "libx264", "-c:a", "aac", "-t", "1", file]);
+  p = await f.studio.importPath(p.id, file);
+  const sid = p.sources[0].id, url = `/api/projects/${p.id}/sources/${sid}/waveform`;
+  const [a, b] = await Promise.all([f.request(url), f.request(url)]);
+  assert.equal(a.status, 200, JSON.stringify(a.body));
+  assert.deepEqual(a.body, b.body);
+  assert.equal(a.body.peaks_per_second, 100);
+  assert.ok(a.body.peaks.length >= 99 && a.body.peaks.length <= 103);
+  assert.ok(Math.max(...a.body.peaks.slice(0, 30)) < .005);
+  assert.ok(Math.max(...a.body.peaks.slice(65, 90)) > .05);
+  assert.equal((await f.studio.getProject(p.id)).revision, p.revision);
+  const cache = f.studio.projectDir(p.id, "waveforms", sid + ".json");
+  const before = (await fs.stat(cache)).mtimeMs;
+  assert.deepEqual((await f.request(url)).body, a.body);
+  assert.equal((await fs.stat(cache)).mtimeMs, before);
+  assert.equal(f.studio.waveformTasks.size, 0);
+  assert.equal(f.studio.processes.size, 0);
+  const source = await f.studio.sourcePath(p.id, sid);
+  await fs.utimes(source, new Date(), new Date(Date.now() + 10000));
+  assert.notEqual((await f.request(url)).body.fingerprint, a.body.fingerprint);
+  await fs.writeFile(cache, "invalid cache");
+  assert.equal((await f.request(url)).status, 200);
+  assert.equal((await f.request(`/api/projects/${p.id}/sources/invalid/waveform`)).status, 400);
+  const silent = path.join(f.root, "no-audio.mp4");
+  await capture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=blue:s=160x90:r=30:d=0.2", "-c:v", "libx264", silent]);
+  p = await f.studio.importPath(p.id, silent);
+  const noAudio = await f.request(`/api/projects/${p.id}/sources/${p.sources[1].id}/waveform`);
+  assert.equal(noAudio.status, 200);
+  assert.equal(noAudio.body.has_audio, false);
+  assert.deepEqual(noAudio.body.peaks, []);
+});
+
 test("shutdown terminates owned child processes and releases the project directory", async (t) => {
   const f = await fixture(t),
     p = await fakeSource(f),
