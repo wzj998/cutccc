@@ -273,12 +273,12 @@
           <div id="timelineScroll" class="timeline-scroll">
             <div id="timelineCanvas" class="timeline-canvas">
               <div id="ruler" class="ruler"></div>
-              <div id="clipTrack" class="clip-track">
+              <div id="clipTrack" class="clip-track" aria-keyshortcuts="Control+c Control+v Meta+c Meta+v">
                 <div class="timeline-placeholder">
                   导入视频后，片段将出现在这里
                 </div>
               </div>
-              <div id="captionTrack" class="caption-track" title="单击编辑；Ctrl/⌘点击多选，Shift连续选择；空白处框选；拖动所选字幕调整时间"></div>
+              <div id="captionTrack" class="caption-track" tabindex="0" aria-label="字幕时间轴" aria-keyshortcuts="Control+c Control+v Meta+c Meta+v" title="单击编辑；Ctrl/⌘点击多选，Shift连续选择；空白处框选；Ctrl+C复制，Ctrl+V粘贴到播放位置；拖动所选字幕调整时间"></div>
               <div id="playhead" class="playhead" hidden>
                 <span id="playheadHandle" role="slider" tabindex="0"
                   aria-label="当前播放位置" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"
@@ -287,7 +287,7 @@
             </div>
           </div>
           <div class="timeline-footer">
-            <span>拖动上方手柄或刻度定位 · 拖动片段调整顺序</span
+            <span>Ctrl+C 复制 · Ctrl+V 粘贴到播放位置 · 拖动片段调整顺序</span
             ><span
               >空格 播放 <b>·</b> F 全屏 <b>·</b> I 入点 <b>·</b> O 出点
               <b>·</b> S 分割 <b>·</b> Del 删除</span

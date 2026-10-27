@@ -448,6 +448,62 @@ test("styled subtitles persist, export to ASS and render at independent position
   assert.equal((await fetch(f.url + "/static/subtitle-style.js")).status, 200);
 });
 
+test("independent pasted captions survive HTTP save and render at their pasted time", {skip: !hasFFmpeg}, async t => {
+  const f=await fixture(t),file=path.join(f.root,'copy.mp4');
+  await capture('ffmpeg',['-v','error','-f','lavfi','-i','color=black:s=320x180:r=30:d=1.4','-c:v','libx264',file]);
+  let p=await f.studio.createProject('Clipboard export');p=await f.studio.importPath(p.id,file);
+  const sid=p.sources[0].id;
+  const cues=[{start:.1,end:.3,text:'Original'},{start:.1,end:.3,text:'Copied',timeline_offset:.6,style:{fontFamily:'Arial',fontSize:80,color:'#ff00ff',position:'middle-center'}}];
+  const saved=await f.request(`/api/projects/${p.id}`,'PATCH',{revision:p.revision,clips:p.clips,subtitles:{[sid]:cues}});
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  assert.deepEqual((await f.studio.getProject(p.id)).subtitles[sid],cues);
+  const done=await waitJob(f,(await f.studio.submit(p.id,'export')).id);
+  assert.equal(done.status,'completed',done.message);
+  assert.match(await fs.readFile(await f.studio.jobFile(done.id,'subtitles.srt'),'utf8'),/00:00:00,700 --> 00:00:00,900\nCopied/);
+  const pixels=spawnSync('ffmpeg',['-v','error','-ss','0.8','-i',await f.studio.jobFile(done.id,'video.mp4'),'-frames:v','1','-pix_fmt','rgb24','-f','rawvideo','pipe:1'],{windowsHide:true,maxBuffer:1024*1024});
+  assert.equal(pixels.status,0,pixels.stderr.toString());
+  let magenta=0;for(let n=0;n<pixels.stdout.length;n+=3)if(pixels.stdout[n]>100&&pixels.stdout[n+1]<100&&pixels.stdout[n+2]>100)magenta++;
+  assert.ok(magenta>25,'copied caption must be burned into the requested frame');
+});
+
+test("recognition refresh retains independently pasted subtitle copies", async t => {
+  const f=await fixture(t);let p=await fakeSource(f);const sid=p.sources[0].id;
+  await models(f.studio.models);
+  const copy={start:1,end:2,text:'Manual copy',timeline_offset:4,style:{fontSize:40}};
+  p=await f.studio.updateEdit(p.id,{revision:p.revision,clips:p.clips,subtitles:{[sid]:[copy]}});
+  f.studio.runProcess=async(jid,cmd,args,folder)=>{
+    await fs.mkdir(path.join(folder,'transcription'));
+    await fs.writeFile(path.join(folder,'transcription/result.json'),JSON.stringify({duration_seconds:10,cues:[{start:1,end:3,text:'Recognized'}]}));
+  };
+  const done=await waitJob(f,(await f.studio.submit(p.id,'transcribe',{source_id:sid})).id);
+  assert.equal(done.status,'completed',done.message);
+  assert.deepEqual((await f.studio.getProject(p.id)).subtitles[sid],[{start:1,end:3,text:'Recognized'},copy]);
+});
+
+test("open export folder only accepts completed export jobs and no caller paths",async t=>{
+ const f=await fixture(t),p=await fakeSource(f),id=randomUUID().replaceAll('-','');
+ await fs.mkdir(f.studio.jobDir(id));
+ const job={id,project_id:p.id,kind:'export',status:'completed'};
+ await f.studio.write(f.studio.jobDir(id,'job.json'),job);
+ await fs.writeFile(f.studio.jobDir(id,'video.mp4'),'test export');
+ const opened=[];f.studio.openFolder=async folder=>opened.push(folder);
+ const route=`/api/jobs/${id}/open-folder`;
+ assert.equal((await f.request(route,'GET')).status,404);
+ assert.equal((await f.request(route,'POST',{path:'C:/'})).status,422);
+ assert.equal((await f.request(route,'POST',{}, {Origin:'https://unrelated.example'})).status,403);
+ assert.equal(opened.length,0);
+ assert.equal((await f.request(route,'POST',{})).status,200);
+ assert.deepEqual(opened,[f.studio.jobDir(id)]);
+ for(const changes of [{status:'running'},{status:'failed'},{kind:'transcribe'}]){
+  await f.studio.write(f.studio.jobDir(id,'job.json'),{...job,...changes});
+  assert.equal((await f.request(route,'POST',{})).status,400);
+ }
+ assert.equal(opened.length,1);
+ await f.studio.write(f.studio.jobDir(id,'job.json'),job);
+ await fs.unlink(f.studio.jobDir(id,'video.mp4'));
+ assert.equal((await f.request(route,'POST',{})).status,404);
+});
+
 test("waveform API extracts real audio once, caches it and preserves the project", {skip: !hasFFmpeg}, async (t) => {
   const f = await fixture(t);
   let p = await f.studio.createProject("Waveform cache");

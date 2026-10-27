@@ -1111,6 +1111,9 @@ kbd {
 .job.failed .job-message {
   color: #dea39d;
 }
+.job-folder-button { padding: 0; background: transparent; color: var(--accent); font: inherit; text-align: left; }
+.job-folder-button:hover:not(:disabled) { text-decoration: underline; }
+.job-folder-button:disabled { opacity: .5; }
 .toast {
   position: fixed;
   bottom: 28px;

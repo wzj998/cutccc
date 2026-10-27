@@ -8,7 +8,11 @@ export function captionResizeContext(project, mapped, edge) {
   const total = project.clips.reduce((n, c) => n + duration(c), 0);
   const [kind, rawIndex] = mapped.occurrence.split(":"), index = Number(rawIndex);
   let offset, lower, upper;
-  if (kind === "clip") {
+  if (cue.timeline_offset !== undefined) {
+    const source = project.sources.find(s => s.id === mapped.sourceId);
+    if (!source) return null;
+    offset = cue.timeline_offset; lower = 0; upper = source.duration;
+  } else if (kind === "clip") {
     const clip = project.clips[index];
     if (!clip || clip.source_id !== mapped.sourceId) return null;
     offset = project.clips.slice(0, index).reduce((n, c) => n + duration(c), 0) - clip.start;
@@ -20,8 +24,9 @@ export function captionResizeContext(project, mapped, edge) {
     offset = voice.start; lower = 0; upper = Math.min(source.duration, total - voice.start);
   } else return null;
   offset += cue.shift || 0;
-  lower = Math.max(lower, cues[mapped.index - 1]?.end ?? 0, -offset);
-  upper = Math.min(upper, cues[mapped.index + 1]?.start ?? Infinity, total - offset);
+  const original = cues.filter(c => c.timeline_offset === undefined), originalIndex = original.indexOf(cue);
+  lower = Math.max(lower, originalIndex >= 0 ? original[originalIndex - 1]?.end ?? 0 : 0, -offset);
+  upper = Math.min(upper, originalIndex >= 0 ? original[originalIndex + 1]?.start ?? Infinity : Infinity, total - offset);
   const start = mapped.start - offset, end = mapped.end - offset;
   const base = edge === "start" ? start : end;
   const minimum = (edge === "start" ? lower : start + 1 / 30) - base;

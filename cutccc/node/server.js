@@ -69,7 +69,7 @@ function editBody(b) {
   for (const cues of Object.values(b.subtitles)) {
     if (!Array.isArray(cues)) fail("Subtitle cues must be arrays", 422);
     for (const c of cues)
-      object(c, ["start", "end", "text", "style", "shift"], ["start", "end", "text"]);
+      object(c, ["start", "end", "text", "style", "shift", "timeline_offset"], ["start", "end", "text"]);
   }
   if (b.voiceovers !== undefined && b.voiceovers !== null) {
     if (!Array.isArray(b.voiceovers)) fail("voiceovers must be an array", 422);
@@ -245,6 +245,7 @@ const ROUTES = [
   ["get", "/api/projects/{id}/jobs", "列出项目任务"],
   ["get", "/api/jobs/{id}", "读取任务"],
   ["get", "/api/jobs/{id}/video", "下载MP4"],
+  ["post", "/api/jobs/{id}/open-folder", "用本机文件管理器打开已完成导出的目录"],
   ["get", "/api/jobs/{id}/subtitles", "下载SRT"],
   ["get", "/api/jobs/{id}/styled-subtitles", "下载带逐条样式的ASS字幕"],
   ["get", "/api/jobs/{id}/log", "任务日志"],
@@ -284,7 +285,7 @@ export function openapi() {
       marginX: {type: "number", minimum: 0, maximum: 40},
       marginY: {type: "number", minimum: 0, maximum: 40},
     }, []),
-    Subtitle: schema({ start: number, end: number, text: str, style: ref("SubtitleStyle"), shift: {type: "number", minimum: -86400, maximum: 86400, default: 0} }, [
+    Subtitle: schema({ start: number, end: number, text: str, style: ref("SubtitleStyle"), shift: {type: "number", minimum: -86400, maximum: 86400, default: 0}, timeline_offset: {type:"number",minimum:-86400,maximum:86400,description:"Independent pasted caption: source time + offset + shift = output time"} }, [
       "start",
       "end",
       "text",
@@ -331,6 +332,7 @@ export function openapi() {
       ["source_id"],
     ),
     Export: schema({ burn_subtitles: { type: "boolean", default: true }, ...exportSchema }, []),
+    OpenExportFolder: schema({}, []),
   };
   const paths = {};
   for (const [method, url, summary] of ROUTES) {
@@ -350,7 +352,7 @@ export function openapi() {
     };
     if (method === "post" || method === "patch" || method === "delete") {
       const name =
-        method === "delete" ? "RemoveSource" : method === "patch"
+        url.endsWith("/open-folder") ? "OpenExportFolder" : method === "delete" ? "RemoveSource" : method === "patch"
           ? "Edit"
           : url === "/api/projects"
             ? "NewProject"
@@ -372,7 +374,7 @@ export function openapi() {
             }
           : { "application/json": { schema: ref(name) } },
       };
-      if (method === "post") {
+      if (method === "post" && !url.endsWith("/open-folder")) {
         delete operation.responses[200];
         operation.responses[
           url.endsWith("/transcribe") || url.endsWith("/export") ? 202 : 201
@@ -430,6 +432,8 @@ export async function startServer(options = {}) {
             "edit-history.js",
             "export-options.js",
             "caption-timing.js",
+            "timeline-clipboard.js",
+            "timeline-navigation.js",
             "style.css",
             "api-docs.js",
           ].includes(name)
@@ -553,6 +557,12 @@ export async function startServer(options = {}) {
           json(res, 202, await studio.submit(id, "export", b));
           return;
         }
+      }
+      const folderMatch = /^\/api\/jobs\/([^/]+)\/open-folder$/.exec(route);
+      if (folderMatch && method === "POST") {
+        object(await body(req), []);
+        json(res, 200, await studio.openExportFolder(folderMatch[1]));
+        return;
       }
       m =
         /^\/api\/jobs\/([^/]+)(?:\/(video|subtitles|styled-subtitles|log|review|transcript))?$/.exec(

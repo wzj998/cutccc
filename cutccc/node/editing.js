@@ -45,7 +45,7 @@ export function validateEdit(sources, clips, subtitles) {
         0 <= c.start &&
         c.start < c.end &&
         c.end <= durations.get(c.source_id) + 0.001 &&
-        c.end - c.start >= 1 / FPS
+        c.end - c.start >= 1 / FPS - 1e-8
       )
     )
       fail("Clip range must be within the source and at least one frame long");
@@ -62,7 +62,7 @@ export function validateEdit(sources, clips, subtitles) {
         fail("Subtitle times must be finite numbers");
       if (
         !(
-          previous <= c.start &&
+          (c.timeline_offset !== undefined ? 0 : previous) <= c.start &&
           c.start < c.end &&
           c.end <= durations.get(id) + 0.05
         )
@@ -74,7 +74,9 @@ export function validateEdit(sources, clips, subtitles) {
         [...c.text].length > 1000
       )
         fail("Subtitle text must contain 1–1000 characters");
-      previous = c.end;
+      if (c.timeline_offset === undefined) previous = c.end;
+      if (c.timeline_offset !== undefined && (!finite(c.timeline_offset) || Math.abs(c.timeline_offset) > 86400))
+        fail("Subtitle timeline offset must be within -86400 and 86400 seconds");
       if (c.shift !== undefined && (!finite(c.shift) || Math.abs(c.shift) > 86400))
         fail("Subtitle timeline shift must be within -86400 and 86400 seconds");
       try { validateStyle(c.style); } catch (error) { fail(error.message); }
@@ -103,6 +105,7 @@ export function mapSubtitles(clips, subtitles, voiceovers = [], sources = []) {
   for (const clip of clips) {
     const duration = clipFrames(clip) / FPS;
     for (const c of subtitles[clip.source_id] || []) {
+      if (c.timeline_offset !== undefined) continue;
       const start = Math.max(clip.start, c.start),
         end = Math.min(clip.end, c.end, clip.start + duration);
       if (end - start >= 0.001)
@@ -120,6 +123,7 @@ export function mapSubtitles(clips, subtitles, voiceovers = [], sources = []) {
     const source = sources.find(s => s.id === voice.source_id);
     if (!source) continue;
     for (const cue of subtitles[voice.source_id] || []) {
+      if (cue.timeline_offset !== undefined) continue;
       const start = Math.max(0, cue.start), end = Math.min(cue.end, source.duration, offset - voice.start);
       if (end - start >= .001) cues.push({
         start: millis(voice.start + start), end: millis(voice.start + end), text: cue.text,
@@ -127,6 +131,11 @@ export function mapSubtitles(clips, subtitles, voiceovers = [], sources = []) {
         ...(cue.shift === undefined ? {} : {shift: cue.shift}),
       });
     }
+  }
+  for (const list of Object.values(subtitles)) for (const cue of list) {
+    if (cue.timeline_offset === undefined) continue;
+    cues.push({start: millis(cue.start + cue.timeline_offset), end: millis(cue.end + cue.timeline_offset), text: cue.text,
+      ...(cue.style === undefined ? {} : {style: structuredClone(cue.style)}), shift: cue.shift || 0});
   }
   return cues.map(({shift = 0, ...cue}) => ({...cue,
     start: millis(Math.max(0, cue.start + shift)), end: millis(Math.min(offset, cue.end + shift)),

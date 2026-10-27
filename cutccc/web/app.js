@@ -2,6 +2,10 @@
 const $ = (id) => document.getElementById(id);
 let subtitleStyle;
 let captionTiming;
+let timelineClipboard;
+let timelineNavigation;
+const timelineNavigationReady = import("/static/timeline-navigation.js").then(module => { timelineNavigation = module; });
+const timelineClipboardReady = import("/static/timeline-clipboard.js").then(module => { timelineClipboard = module; });
 const captionTimingReady = import("/static/caption-timing.js").then(module => { captionTiming = module; });
 const subtitleStyleReady = import("/static/subtitle-style.js").then(module => { subtitleStyle = module; });
 let editHistory;
@@ -41,6 +45,8 @@ const state = {
   captionSelectionAnchor: null,
   suppressCaptionClick: false,
   previewCues: null,
+  clipboardKind: "clip",
+  selectedVoice: -1,
 };
 const esc = (value) =>
   String(value ?? "").replace(
@@ -231,6 +237,8 @@ async function loadProject(id, confirmChanges = true) {
   }
   pause();
   state.project = await api(`/api/projects/${id}`);
+  state.clipboardKind = "clip";
+  state.selectedVoice = -1;
   state.waveforms.clear();
   state.spectrograms.clear();
   state.clip = state.project.clips.length ? 0 : -1;
@@ -485,6 +493,7 @@ function mappedCues() {
   for (const [clipIndex, c] of (state.project?.clips || []).entries()) {
     const d = duration(c);
     for (const [index, cue] of (state.project.subtitles[c.source_id] || []).entries()) {
+      if (cue.timeline_offset !== undefined) continue;
       const a = Math.max(c.start, cue.start),
         b = Math.min(c.end, cue.end, c.start + d);
       if (b > a)
@@ -501,10 +510,16 @@ function mappedCues() {
   for (const [voiceIndex, voice] of (state.project?.voiceovers || []).entries()) {
     const s = state.project.sources.find(s => s.id === voice.source_id);
     for (const [index, cue] of (state.project.subtitles[voice.source_id] || []).entries()) {
+      if (cue.timeline_offset !== undefined) continue;
       const start = Math.max(0, cue.start), end = Math.min(cue.end, s.duration, offset - voice.start);
       if (end > start) result.push({start: voice.start + start, end: voice.start + end, text: cue.text, style: cue.style,
         sourceId: voice.source_id, index, occurrence: `voice:${voiceIndex}:${index}`});
     }
+  }
+  for (const [sourceId, list] of Object.entries(state.project?.subtitles || {})) for (const [index, cue] of list.entries()) {
+    if (cue.timeline_offset === undefined) continue;
+    result.push({start:cue.start+cue.timeline_offset,end:cue.end+cue.timeline_offset,text:cue.text,style:cue.style,
+      sourceId,index,occurrence:`copy:${sourceId}:${index}`});
   }
   return result.map(cue => {
     const shift = state.project.subtitles[cue.sourceId][cue.index].shift || 0;
@@ -766,7 +781,7 @@ function renderSubtitles() {
     ? entries
         .map(
           ({cue: c, index: i, sourceId, key, name}) =>
-            `<div class="subtitle-row ${state.subtitleSelection.has(key) ? "selected" : ""}" data-cue="${i}" data-cue-source="${sourceId}"><div class="subtitle-select-line"><input type="checkbox" data-select-cue="${key}" aria-label="选择字幕 ${i + 1}" ${state.subtitleSelection.has(key) ? "checked" : ""}><span title="${esc(name)}">${String(i + 1).padStart(2, "0")} · ${esc(name)}</span><button class="icon-button" data-remove-cue="${i}" title="删除字幕" aria-label="删除字幕 ${i + 1}">×</button></div><button class="subtitle-open" data-edit-style="${key}" aria-label="编辑字幕 ${i + 1}">${esc(c.text)}</button><div class="subtitle-placement">${placementLabel(key)}</div><div class="subtitle-clock-label">原素材 ${time(c.start)} – ${time(c.end)}</div></div>`,
+            `<div class="subtitle-row ${state.subtitleSelection.has(key) ? "selected" : ""}" data-cue="${i}" data-cue-source="${sourceId}"><div class="subtitle-select-line"><input type="checkbox" data-select-cue="${key}" aria-label="选择字幕 ${i + 1}" ${state.subtitleSelection.has(key) ? "checked" : ""}><span title="${esc(name)}">${String(i + 1).padStart(2, "0")} · ${esc(name)}</span><button class="icon-button" data-remove-cue="${i}" title="删除字幕" aria-label="删除字幕 ${i + 1}">×</button></div><button class="subtitle-open" data-edit-style="${key}" aria-label="编辑字幕 ${i + 1}">${esc(c.text)}</button><div class="subtitle-placement">${placementLabel(key)}</div><div class="subtitle-clock-label">${c.timeline_offset === undefined ? "原素材" : "独立副本 · 参考区间"} ${time(c.start)} – ${time(c.end)}</div></div>`,
         )
         .join("")
     : '<p class="muted" style="margin-top:18px">生成字幕后，可以在这里逐条校对文字和时间，也可以点击 ＋ 手动添加。</p>';
@@ -783,6 +798,7 @@ function selectedSubtitleEntries() {
 function revealSubtitleInList(sourceId, index, focus = false) {
   if (!state.project?.subtitles[sourceId]?.[index]) return;
   state.subtitleSelectionProject = state.project.id;
+  state.clipboardKind = "captions";
   state.subtitleSelection.add(`${sourceId}:${index}`);
   if (sourceId !== state.source) $("subtitleScope").value = "project";
   selectLibraryTab("captions");
@@ -832,6 +848,7 @@ function commitCaptionMove(context, delta, occurrence) {
   revealSubtitleInList(anchor.sourceId, anchor.index);
 }
 function selectTimelineCaption(block, event) {
+  state.clipboardKind = "captions";
   const key = block.dataset.captionKey, occurrence = block.dataset.captionOccurrence;
   if (event.shiftKey) {
     const cues = mappedCues();
@@ -847,6 +864,7 @@ function selectTimelineCaption(block, event) {
   }
   state.subtitleSelectionProject = state.project.id;
   renderSubtitles();
+  block.focus({preventScroll:true});
 }
 function startCaptionGesture(event) {
   if (event.button !== 0 || !event.isPrimary || !state.project || state.busy || state.saving || state.captionGesture) return;
@@ -854,6 +872,8 @@ function startCaptionGesture(event) {
   const edge = event.target.closest("[data-resize-caption]")?.dataset.resizeCaption;
   if (block && (event.ctrlKey || event.metaKey || event.shiftKey)) { event.preventDefault(); return; }
   event.preventDefault();
+  state.clipboardKind = "captions";
+  (block || $("captionTrack")).focus({preventScroll:true});
   pause();
   const track = $("captionTrack"), rect = track.getBoundingClientRect();
   if (block && (edge || !state.subtitleSelection.has(block.dataset.captionKey))) {
@@ -1008,6 +1028,9 @@ function renderCaptionStyleEditor() {
   if (entries.length === 1 && $("captionFocusedText").value !== entries[0].cue.text)
     $("captionFocusedText").value = entries[0].cue.text;
   if (entries.length === 1) {
+    const copied = entries[0].cue.timeline_offset !== undefined;
+    $("captionSourceStart").parentElement.firstChild.textContent = copied ? "副本参考开始 / 秒" : "原素材开始 / 秒";
+    $("captionSourceEnd").parentElement.firstChild.textContent = copied ? "副本参考结束 / 秒" : "原素材结束 / 秒";
     $("captionSourceStart").value = entries[0].cue.start;
     $("captionSourceEnd").value = entries[0].cue.end;
     $("captionTimeShift").value = entries[0].cue.shift || 0;
@@ -1103,16 +1126,34 @@ function renderJobs() {
         .join("")
     : '<p class="muted">导出的视频会出现在这里。</p>';
   for (const job of state.jobs) {
-    if (!job.result?.styled_subtitles_url) continue;
+    if (job.status !== "completed" || job.kind !== "export" || !job.result?.video_url) continue;
     const videoLink = [...$("jobList").querySelectorAll("a")].find(a => a.getAttribute("href") === job.result.video_url);
     if (!videoLink) continue;
-    const link = document.createElement("a");
-    link.href = job.result.styled_subtitles_url;
-    link.download = "subtitles.ass";
-    link.textContent = "样式字幕 ASS ↓";
-    videoLink.parentElement.append(link);
+    if (job.result.styled_subtitles_url) {
+      const link = document.createElement("a");
+      link.href = job.result.styled_subtitles_url;
+      link.download = "subtitles.ass";
+      link.textContent = "样式字幕 ASS ↓";
+      videoLink.parentElement.append(link);
+    }
+    const button = document.createElement("button");
+    button.type = "button"; button.className = "job-folder-button";
+    button.dataset.openExportFolder = job.id;
+    button.textContent = "打开所在文件夹";
+    button.title = "在本机文件资源管理器中打开该次导出的目录";
+    videoLink.parentElement.append(button);
   }
 }
+$("jobList").addEventListener("click", async event => {
+  const button = event.target.closest("[data-open-export-folder]");
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  try {
+    await api(`/api/jobs/${button.dataset.openExportFolder}/open-folder`,"POST",{});
+    toast("已打开导出所在文件夹。");
+  } catch (error) { toast(error.message,true); }
+  finally { button.disabled = false; }
+});
 
 function setPlaying(playing) {
   state.playing = playing;
@@ -1163,6 +1204,8 @@ function selectClip(index, at, autoplay = false) {
   state.clip = index;
   state.source = selected().source_id;
   render();
+  state.pendingOutputSeek = state.project.clips.slice(0,index).reduce((n,c)=>n+duration(c),0) +
+    Math.max(0,Math.min((at ?? selected().start)-selected().start,duration(selected())));
   setPreview(at ?? selected().start, autoplay);
 }
 function seekOutput(seconds, autoplay = state.playing) {
@@ -1189,6 +1232,7 @@ function seekOutput(seconds, autoplay = state.playing) {
       }
       state.pendingOutputSeek = position;
       state.outputEndSelected = position === total();
+      followPlayhead(position,true);
       return;
     }
     offset += length;
@@ -1279,11 +1323,33 @@ function nextClip() {
   else {
     pause();
     state.outputEndSelected = true;
+    followPlayhead(total(),true);
   }
 }
+function followPlayhead(position, force = false) {
+  if (!timelineNavigation || (!state.playing && !force) || state.captionGesture || state.timelineScrub || state.seekDragging) return;
+  const scroll = $("timelineScroll");
+  const left = timelineNavigation.followScrollLeft(position,state.zoom,scroll.scrollLeft,scroll.clientWidth,scroll.scrollWidth);
+  if (Math.abs(left-scroll.scrollLeft) > .5) scroll.scrollLeft = left;
+}
+function stepTimelineFrame(direction) {
+  if (!state.project?.clips.length || state.busy || state.captionGesture || state.timelineScrub || state.seekDragging || !timelineNavigation) return;
+  const clip = selected();
+  // Paused media may be clamped before a fractional trim endpoint; the edit playhead remains authoritative.
+  let position = state.outputEndSelected ? total() : Number($("fullscreenSeek").value);
+  if (clip && state.playing && !$("video").paused && !state.switching && !$("video").seeking)
+    position = state.project.clips.slice(0,state.clip).reduce((n,c)=>n+duration(c),0) +
+      Math.max(0, Math.min($("video").currentTime-clip.start,duration(clip)));
+  if (state.pendingOutputSeek !== null) position = state.pendingOutputSeek;
+  pause();
+  const next = timelineNavigation.stepFrameTime(position,direction,total());
+  seekOutput(next,false);
+  $("fullscreenSeek").value = next;
+  followPlayhead(next,true);
+}
 function tick() {
-  const video = $("video"),
-    c = selected();
+  const video = $("video");
+  let c = selected();
   if (
     state.playing &&
     c &&
@@ -1292,6 +1358,7 @@ function tick() {
     video.currentTime >= c.end - 0.012
   )
     nextClip();
+  c = selected();
   const current = video.currentTime || 0;
   $("sourceClock").textContent = `素材 ${time(current)}`;
   let offset = 0;
@@ -1316,12 +1383,13 @@ function tick() {
     `${time(offset)} / ${time(total())}`,
   );
   $("playhead").style.left = `${offset * state.zoom}px`;
+  followPlayhead(offset);
   $("playheadHandle").setAttribute("aria-valuemax", total());
   $("playheadHandle").setAttribute("aria-valuenow", offset);
   $("playheadHandle").setAttribute("aria-valuetext", time(offset));
   const captionTime = state.outputEndSelected ? Math.max(0, total() - 1 / 30) : offset;
   const cues = c ? (state.previewCues ||= mappedCues()).filter(cue => cue.start <= captionTime && captionTime < cue.end)
-    : (state.project?.subtitles[state.source] || []).filter(cue => cue.start <= current && current < cue.end);
+    : (state.project?.subtitles[state.source] || []).filter(cue => cue.timeline_offset === undefined && cue.start <= current && current < cue.end);
   renderCaptionPreview(cues);
   requestAnimationFrame(tick);
 }
@@ -1452,6 +1520,7 @@ document.addEventListener("focusout", () => editHistory?.breakGroup());
 $("sourceList").onclick = (e) => {
   const card = e.target.closest("[data-source]");
   if (!card) return;
+  state.clipboardKind = "clip"; state.subtitleSelection.clear();
   const index = state.project.clips.findIndex(
     (c) => c.source_id === card.dataset.source,
   );
@@ -1481,6 +1550,7 @@ $("clipTrack").onclick = (e) => {
   }
   const clip = e.target.closest("[data-clip]");
   if (!clip) return;
+  state.clipboardKind = "clip"; state.subtitleSelection.clear();
   const index = Number(clip.dataset.clip),
     c = state.project.clips[index];
   const f = Math.max(
@@ -1495,7 +1565,7 @@ $("clipTrack").onclick = (e) => {
 $("clipTrack").onkeydown = (e) => {
   if (e.key === "Enter") {
     const clip = e.target.closest("[data-clip]");
-    if (clip) selectClip(Number(clip.dataset.clip));
+    if (clip) { state.clipboardKind = "clip"; state.subtitleSelection.clear(); selectClip(Number(clip.dataset.clip)); }
   }
 };
 $("clipTrack").ondragstart = (e) => {
@@ -1534,6 +1604,9 @@ document.addEventListener("pointercancel", finishTimelineScrub);
 $("playheadHandle").onclick = (event) => event.stopPropagation();
 $("playheadHandle").ondragstart = (event) => event.preventDefault();
 $("playheadHandle").onkeydown = (event) => {
+  if (["ArrowLeft","ArrowRight"].includes(event.key) && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    event.preventDefault(); event.stopPropagation(); stepTimelineFrame(event.key === "ArrowLeft" ? -1 : 1); return;
+  }
   let position = Number($("fullscreenSeek").value);
   if (event.key === "Home") position = 0;
   else if (event.key === "End") position = total();
@@ -1542,7 +1615,8 @@ $("playheadHandle").onkeydown = (event) => {
   else return;
   event.preventDefault();
   event.stopPropagation();
-  seekOutput(position);
+  seekOutput(position,false);
+  followPlayhead(Math.max(0,Math.min(total(),position)),true);
 };
 window.addEventListener("blur", () => finishTimelineScrub());
 $("fullscreenPlayBtn").onclick = togglePlay;
@@ -1659,6 +1733,12 @@ $("voiceoverList").oninput = (e) => {
   markDirty(`voice:${row.dataset.voice}:${field}`);
   renderTimeline();
 };
+$("voiceoverList").addEventListener("pointerdown", event => {
+  const row = event.target.closest("[data-voice]");
+  if (!row) return;
+  state.clipboardKind = "voice"; state.selectedVoice = Number(row.dataset.voice);
+  for (const item of $("voiceoverList").querySelectorAll("[data-voice]")) item.classList.toggle("selected", item === row);
+});
 $("voiceoverList").onclick = (e) => {
   const button = e.target.closest("[data-remove-voice],[data-remove-voice-all],[data-restore-voice]");
   if (!button) return;
@@ -1702,6 +1782,7 @@ for (const tab of document.querySelectorAll(".inspector-tabs .tab"))
 $("subtitleList").onclick = (e) => {
   const styleButton = e.target.closest("[data-edit-style]");
   if (styleButton) {
+    state.clipboardKind = "captions";
     state.subtitleSelection = new Set([styleButton.dataset.editStyle]);
     const entry = selectedSubtitleEntries()[0];
     previewSubtitle(entry.sourceId, entry.index);
@@ -1730,6 +1811,7 @@ $("subtitleList").onclick = (e) => {
 $("subtitleList").onchange = (event) => {
   const key = event.target.dataset.selectCue;
   if (!key) return;
+  state.clipboardKind = "captions";
   if (event.target.checked) state.subtitleSelection.add(key);
   else state.subtitleSelection.delete(key);
   event.target.closest("[data-cue]").classList.toggle("selected", event.target.checked);
@@ -1792,9 +1874,10 @@ for (const [id, field] of [["captionSourceStart", "start"], ["captionSourceEnd",
     const entries = selectedSubtitleEntries();
     if (entries.length !== 1) return;
     const {cue, index, sourceId} = entries[0], value = Number(event.target.value);
-    const cues = state.project.subtitles[sourceId], source = state.project.sources.find(s => s.id === sourceId);
-    const low = field === "start" ? (cues[index - 1]?.end ?? 0) : cue.start + 1 / 30;
-    const high = field === "start" ? cue.end - 1 / 30 : (cues[index + 1]?.start ?? source.duration);
+    const cues = state.project.subtitles[sourceId].filter(c=>c.timeline_offset===undefined), source = state.project.sources.find(s => s.id === sourceId);
+    const originalIndex = cues.indexOf(cue);
+    const low = field === "start" ? (originalIndex>=0 ? cues[originalIndex - 1]?.end ?? 0 : 0) : cue.start + 1 / 30;
+    const high = field === "start" ? cue.end - 1 / 30 : (originalIndex>=0 ? cues[originalIndex + 1]?.start ?? source.duration : source.duration);
     if (!event.target.value || !Number.isFinite(value) || value < low || value > high) {
       event.target.value = cue[field]; toast("时间需在素材范围内，且不能与相邻字幕重叠。", true); return;
     }
@@ -1805,6 +1888,7 @@ for (const [id, field] of [["captionSourceStart", "start"], ["captionSourceEnd",
   };
 }
 $("selectAllCaptions").onclick = () => {
+  state.clipboardKind = "captions";
   for (const entry of subtitleEntries()) state.subtitleSelection.add(entry.key);
   renderSubtitles();
   $("captionStyleEditor").open = true;
@@ -1837,9 +1921,10 @@ function addCaption() {
   const clip = selected();
   const limit = clip?.source_id === s.id ? clip.end : s.duration;
   const requested = Math.max($("video").currentTime, clip?.start || 0);
+  const originals = cues.filter(c=>c.timeline_offset===undefined);
   let start = requested;
-  for (const c of cues) if (start >= c.start && start < c.end) start = c.end;
-  const next = cues.find((c) => c.start >= start),
+  for (const c of originals) if (start >= c.start && start < c.end) start = c.end;
+  const next = originals.find((c) => c.start >= start),
     end = Math.min(start + 2, next?.start ?? limit, limit);
   if (end - start < 0.05) {
     toast("当前位置没有可用的字幕间隙，请移动播放头。", true);
@@ -1939,6 +2024,13 @@ function handleEditorKeydown(e) {
       .catch((err) => toast(err.message, true));
     return;
   }
+  if (["ArrowLeft","ArrowRight"].includes(e.key) && !e.defaultPrevented && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
+      !e.isComposing && !$("exportDialog").open && !e.target.isContentEditable &&
+      (!e.target.matches("input,textarea,select") || e.target === $("fullscreenSeek"))) {
+    e.preventDefault(); e.stopPropagation();
+    stepTimelineFrame(e.key === "ArrowLeft" ? -1 : 1);
+    return;
+  }
   if (
     e.target.matches("input,textarea,select,button") ||
     e.target.isContentEditable ||
@@ -1966,6 +2058,68 @@ function handleEditorKeydown(e) {
   else if (e.key.toLowerCase() === "i") $("setInBtn").click();
   else if (e.key.toLowerCase() === "o") $("setOutBtn").click();
 }
+function clipboardTextTarget(event) {
+  const target = event.target instanceof Element ? event.target : document.activeElement;
+  return !!target?.closest("input,textarea,select") || !!target?.isContentEditable;
+}
+function clipboardUnavailable(event) {
+  return clipboardTextTarget(event) || !state.project || !timelineClipboard || state.busy || state.saving ||
+    state.captionGesture || state.timelineScrub || $("exportDialog").open;
+}
+document.addEventListener("copy", event => {
+  if (clipboardUnavailable(event) || !event.clipboardData || window.getSelection()?.toString()) return;
+  try {
+    let placements = [];
+    if (state.clipboardKind === "captions") {
+      const all = mappedCues().filter(c=>state.subtitleSelection.has(`${c.sourceId}:${c.index}`));
+      const anchor = all.find(c=>c.occurrence===state.captionSelectionAnchor) ||
+        [...all].sort((a,b)=>Math.abs(a.start-Number($("fullscreenSeek").value))-Math.abs(b.start-Number($("fullscreenSeek").value)))[0];
+      for (const key of state.subtitleSelection) {
+        const candidates = all.filter(c=>`${c.sourceId}:${c.index}`===key);
+        candidates.sort((a,b)=>Math.abs(a.start-anchor.start)-Math.abs(b.start-anchor.start));
+        if (candidates[0]) placements.push(candidates[0]);
+      }
+    }
+    const payload = timelineClipboard.copyTimelineItems(state.project,state.clipboardKind,
+      state.clipboardKind === "voice" ? state.selectedVoice : state.clip,placements);
+    const encoded = timelineClipboard.encodeClipboard(payload);
+    event.clipboardData.setData("text/plain",payload.kind === "captions" ? payload.items.map(c=>c.text).join("\n") :
+      state.project.sources.find(s=>s.id===payload.items[0].source_id)?.name || "cutccc 时间轴元素");
+    event.clipboardData.setData(timelineClipboard.CLIPBOARD_MIME,encoded);
+    event.preventDefault();
+    toast(`已复制 ${payload.items.length} ${payload.kind === "captions" ? "条字幕" : payload.kind === "voice" ? "段旁白音频" : "个视频片段"}，移动播放头后按 Ctrl+V 粘贴。`);
+  } catch (error) { event.preventDefault(); toast(error.message,true); }
+});
+document.addEventListener("paste", event => {
+  if (clipboardUnavailable(event) || !event.clipboardData) return;
+  const text = event.clipboardData.getData(timelineClipboard.CLIPBOARD_MIME) || event.clipboardData.getData("text/plain");
+  if (!text.startsWith(timelineClipboard.CLIPBOARD_PREFIX)) return;
+  event.preventDefault();
+  try {
+    const result = timelineClipboard.pasteTimelineItems(state.project,timelineClipboard.decodeClipboard(text),Number($("fullscreenSeek").value));
+    pause(); state.project = result.project;
+    state.clipboardKind = result.kind; state.subtitleSelection.clear();
+    if (result.kind === "captions") {
+      state.subtitleSelection = new Set(result.keys); state.subtitleSelectionProject = state.project.id;
+    } else if (result.kind === "clip") {
+      state.clip = result.index; state.source = state.project.clips[result.index].source_id;
+    } else state.selectedVoice = result.index;
+    markDirty(); render(); seekOutput(result.position,false);
+    if (result.kind === "captions") {
+      const first = selectedSubtitleEntries()[0];
+      state.captionSelectionAnchor = mappedCues().find(c=>`${c.sourceId}:${c.index}`===first.key)?.occurrence;
+      revealSubtitleInList(first.sourceId,first.index);
+    } else {
+      document.querySelector('[data-tab="clip"]').click();
+      if (result.kind === "clip") selectLibraryTab("materials");
+      else {
+        const row = $("voiceoverList").querySelector(`[data-voice="${result.index}"]`);
+        row?.classList.add("selected"); row?.scrollIntoView({block:"nearest"});
+      }
+    }
+    toast("已粘贴到播放位置，可按 Ctrl+Z 撤销。");
+  } catch (error) {toast(error.message,true);}
+});
 document.addEventListener("keydown", handleEditorKeydown);
 let dragDepth = 0;
 document.addEventListener("dragenter", (e) => {
@@ -2023,7 +2177,7 @@ async function health() {
 }
 (async () => {
   try {
-    await Promise.all([subtitleStyleReady, editHistoryReady, captionTimingReady]);
+    await Promise.all([subtitleStyleReady, editHistoryReady, captionTimingReady, timelineClipboardReady, timelineNavigationReady]);
     setAudioView(localStorage.getItem("cutccc-audio-view") || "waveform");
     await health();
     await projectOptions();

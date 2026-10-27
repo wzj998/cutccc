@@ -24,6 +24,7 @@ import { launch, stopProcess } from "./processes.js";
 import { generateWaveform, WAVEFORM_VERSION } from "./waveform.js";
 import { generateSpectrogram, spectrumRegion, SPECTROGRAM_VERSION } from "./spectrogram.js";
 import { exportOptions } from "../web/export-options.js";
+import { openFolder } from "./open-folder.js";
 
 const uuid = () => randomUUID().replaceAll("-", "");
 const now = () => Date.now() / 1000;
@@ -625,7 +626,8 @@ export class Studio {
             );
           const subtitles = {
             ...current.subtitles,
-            [sourceId]: generated.cues,
+            [sourceId]: [...generated.cues, ...(current.subtitles[sourceId] || []).filter(c => c.timeline_offset !== undefined)]
+              .sort((a,b) => a.start - b.start || Number(a.timeline_offset !== undefined) - Number(b.timeline_offset !== undefined)),
           };
           validateEdit(current.sources, current.clips, subtitles);
           current.subtitles = subtitles;
@@ -693,6 +695,12 @@ export class Studio {
         : this.jobDir(id, name);
     if (!(await exists(file))) throw new APIError("Output file not found", 404);
     return file;
+  }
+  async openFolder(folder) { await openFolder(folder); }
+  async openExportFolder(id) {
+    const video = await this.jobFile(id, "video.mp4");
+    await this.openFolder(path.dirname(video));
+    return {opened:true};
   }
   async close() {
     if (this.closed) return;
