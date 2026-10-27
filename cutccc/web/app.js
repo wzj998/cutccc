@@ -780,6 +780,22 @@ function subtitleEntries(all = false) {
 function selectedSubtitleEntries() {
   return subtitleEntries(true).filter(entry => state.subtitleSelection.has(entry.key));
 }
+function revealSubtitleInList(sourceId, index, focus = false) {
+  if (!state.project?.subtitles[sourceId]?.[index]) return;
+  state.subtitleSelectionProject = state.project.id;
+  state.subtitleSelection.add(`${sourceId}:${index}`);
+  if (sourceId !== state.source) $("subtitleScope").value = "project";
+  selectLibraryTab("captions");
+  document.querySelector('[data-tab="subtitles"]').click();
+  $("captionStyleEditor").open = true;
+  renderSubtitles();
+  const row = [...$("subtitleList").querySelectorAll("[data-cue]")].find(
+    row => row.dataset.cueSource === sourceId && Number(row.dataset.cue) === index,
+  );
+  if (!row) return;
+  row.scrollIntoView({block: "center", inline: "nearest"});
+  if (focus) row.querySelector(".subtitle-open").focus({preventScroll: true});
+}
 function openTimelineCaption(occurrence) {
   const mapped = mappedCues().find(cue => cue.occurrence === occurrence);
   if (!mapped) return;
@@ -788,19 +804,8 @@ function openTimelineCaption(occurrence) {
   state.subtitleSelection = new Set([`${mapped.sourceId}:${mapped.index}`]);
   // Seek the clicked occurrence, including reused clips and repeated voiceovers.
   seekOutput(mapped.start + Math.min(.05, (mapped.end - mapped.start) / 2), false);
-  if (mapped.sourceId !== state.source) $("subtitleScope").value = "project";
-  selectLibraryTab("captions");
-  document.querySelector('[data-tab="subtitles"]').click();
-  $("captionStyleEditor").open = true;
-  renderSubtitles();
   renderTimeline();
-  const row = [...$("subtitleList").querySelectorAll("[data-cue]")].find(
-    row => row.dataset.cueSource === mapped.sourceId && Number(row.dataset.cue) === mapped.index,
-  );
-  if (row) {
-    row.scrollIntoView({block: "center", inline: "nearest"});
-    row.querySelector(".subtitle-open").focus({preventScroll: true});
-  }
+  revealSubtitleInList(mapped.sourceId, mapped.index, true);
 }
 function captionMoveContext() {
   const placements = mappedCues().filter(c => state.subtitleSelection.has(`${c.sourceId}:${c.index}`));
@@ -812,16 +817,19 @@ function captionMoveContext() {
     maximum: Math.min(...placements.map(c => total() - c.end), ...entries.map(e => 86400 - e.shift))};
 }
 function commitCaptionMove(context, delta, occurrence) {
-  if (!context || state.project?.id !== context.projectId || Math.abs(delta) < .000001) return;
-  for (const entry of context.entries) {
-    const shift = Math.round((entry.shift + delta) * 1e6) / 1e6;
-    if (shift) entry.cue.shift = shift; else delete entry.cue.shift;
+  if (!context || state.project?.id !== context.projectId) return;
+  if (Math.abs(delta) >= .000001) {
+    for (const entry of context.entries) {
+      const shift = Math.round((entry.shift + delta) * 1e6) / 1e6;
+      if (shift) entry.cue.shift = shift; else delete entry.cue.shift;
+    }
+    markDirty();
   }
-  markDirty();
   $("subtitleScope").value = "project";
   const anchor = context.placements.find(c => c.occurrence === occurrence) || context.placements[0];
   seekOutput(anchor.start + delta + Math.min(.05, (anchor.end - anchor.start) / 2), false);
-  renderSubtitles(); renderTimeline();
+  renderTimeline();
+  revealSubtitleInList(anchor.sourceId, anchor.index);
 }
 function selectTimelineCaption(block, event) {
   const key = block.dataset.captionKey, occurrence = block.dataset.captionOccurrence;
@@ -965,10 +973,8 @@ function finishCaptionGesture(event, cancel = false) {
       markDirty();
       seekOutput(context.offset + cue[context.edge] + (context.edge === "start" ? .01 : -.01), false);
     }
-    selectLibraryTab("captions");
-    document.querySelector('[data-tab="subtitles"]').click();
-    $("captionStyleEditor").open = true;
-    renderSubtitles(); renderTimeline();
+    renderTimeline();
+    revealSubtitleInList(context.sourceId, context.index);
   } else if (gesture.kind === "move") {
     if (gesture.moved) commitCaptionMove(gesture.context, gesture.delta, gesture.occurrence);
     else openTimelineCaption(gesture.occurrence);
@@ -1794,7 +1800,8 @@ for (const [id, field] of [["captionSourceStart", "start"], ["captionSourceEnd",
     }
     if (value === cue[field]) return;
     cue[field] = value;
-    markDirty(); renderSubtitles(); renderTimeline();
+    markDirty(); renderTimeline();
+    revealSubtitleInList(sourceId, index);
   };
 }
 $("selectAllCaptions").onclick = () => {
@@ -1849,6 +1856,7 @@ function addCaption() {
   previewSubtitle(s.id, index);
   renderSubtitles();
   renderTimeline();
+  revealSubtitleInList(s.id, index);
   $("captionStyleEditor").open = true;
   $("captionStyleEditor").scrollIntoView({block: "nearest"});
   $("captionFocusedText").focus({preventScroll: true});

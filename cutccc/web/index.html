@@ -297,12 +297,10 @@
       </section>
       <aside class="inspector">
         <div class="inspector-tabs">
-          <button class="tab active" data-tab="clip">片段</button
-          ><button class="tab" data-tab="subtitles">
-            编辑
-          </button>
+          <button class="tab active" data-tab="subtitles">编辑</button>
+          <button class="tab" data-tab="clip">片段</button>
         </div>
-        <div id="clipPanel" class="inspector-content">
+        <div id="clipPanel" class="inspector-content" hidden>
           <div class="section-label">片段设置</div>
           <h3 id="selectedName">选择一个片段</h3>
           <p id="selectedMeta" class="muted">在时间线上点击片段进行编辑。</p>
@@ -359,7 +357,6 @@
         <div
           id="subtitlesPanel"
           class="inspector-content subtitles-panel"
-          hidden
         >
           <details id="captionStyleEditor" class="caption-style-editor" open>
             <summary>当前选择 · <span id="captionSelectionCount">未选择字幕</span></summary>
