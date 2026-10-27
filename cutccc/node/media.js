@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { capture } from "./processes.js";
-import { toAss } from "./subtitle-ass.js";
+import { toAss, wrapExportCues } from "./subtitle-ass.js";
 import { exportProfile } from "../web/export-options.js";
+import {gpuRotation, geometryFilter, clipVideoFilter, GPU_INPUT_ARGS} from "./export-video-filter.js";
 import {
   APIError,
   clipFrames,
@@ -14,7 +15,7 @@ import {
   validateVoiceovers,
 } from "./editing.js";
 
-export async function probe(file) {
+export async function probe(file, details = false) {
   let data;
   try {
     data = JSON.parse(
@@ -54,7 +55,22 @@ export async function probe(file) {
     height,
     fps: (() => { const [n, d] = (video.avg_frame_rate || "0/1").split("/").map(Number); return d ? n / d : 0; })(),
     has_audio: data.streams.some((s) => s.codec_type === "audio"),
+    ...(details ? {video} : {}),
   };
+}
+const gpuScaleChecks = new Map();
+async function canScaleOnGpu(file, clip, width, height, fps, rotation) {
+  const stat = await fs.stat(file);
+  const key = JSON.stringify([file,stat.size,stat.mtimeMs,width,height,fps,rotation]);
+  if (gpuScaleChecks.has(key)) return gpuScaleChecks.get(key);
+  const check = capture("ffmpeg",["-nostdin","-v","error",...GPU_INPUT_ARGS,"-ss",String(clip.start),"-i",file,
+    "-an","-sn","-dn","-vf",`fps=${fps},${geometryFilter(width,height,rotation)}`,"-frames:v","1","-f","null","-"],
+    {timeout:20000,maxBytes:1024*1024}).then(()=>({supported:true}),error=>({supported:false,reason:error.message.slice(-600)}));
+  gpuScaleChecks.set(key,check);
+  const result = await check;
+  if (!result.supported) gpuScaleChecks.delete(key);
+  while (gpuScaleChecks.size > 64) gpuScaleChecks.delete(gpuScaleChecks.keys().next().value);
+  return result;
 }
 export async function thumbnail(source, target) {
   await capture("ffmpeg", [
@@ -133,24 +149,39 @@ export async function render(
   const voices = project.voiceovers || [];
   const audibleVoices = voices.filter(v => (v.volume ?? 1) > 0);
   validateVoiceovers(project.sources, clips, voices);
-  const profile = exportProfile(sources.get(clips[0].source_id), options);
+  const profile = exportProfile(sources.get(clips[0].source_id), options, outputDuration(clips));
   const { width, height, fps } = profile;
   const args = ["-nostdin", "-v", "error", "-y"],
     filters = [];
+  const paths = new Map(), metadata = new Map(), gpuChecks = new Map(), plans = [];
   for (const [i, c] of clips.entries()) {
-    if (hw) args.push("-hwaccel", hw);
+    if (!paths.has(c.source_id)) paths.set(c.source_id,await sourcePath(c.source_id));
+    const file = paths.get(c.source_id);
+    let rotation = null, fallback = null;
+    if (hw === "cuda" && process.env.CUTCCC_EXPORT_GPU_SCALE !== "0") {
+      if (!metadata.has(file)) metadata.set(file,await probe(file,true));
+      const candidate = gpuRotation(metadata.get(file).video);
+      if (candidate !== null) {
+        if (!gpuChecks.has(file)) gpuChecks.set(file,await canScaleOnGpu(file,c,width,height,fps,candidate));
+        const check = gpuChecks.get(file);
+        if (check.supported) rotation = candidate; else fallback = check.reason;
+      }
+    }
+    if (rotation !== null) args.push(...GPU_INPUT_ARGS);
+    else if (hw && !fallback) args.push("-hwaccel", hw);
+    plans.push({source_id:c.source_id,gpu_scaling:rotation !== null,...(fallback ? {fallback} : {})});
     args.push(
       "-ss",
       String(c.start),
       "-t",
       String(c.end - c.start),
       "-i",
-      await sourcePath(c.source_id),
+      file,
     );
     const frames = clipFrames(c) * fps / FPS,
       duration = clipFrames(c) / FPS;
     filters.push(
-      `[${i}:v:0]trim=start=0:end=${c.end - c.start},setpts=PTS-STARTPTS,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},tpad=stop_mode=clone:stop_duration=1,trim=end_frame=${frames},setpts=PTS-STARTPTS[v${i}]`,
+      `[${i}:v:0]${clipVideoFilter(c,width,height,fps,frames,rotation)}[v${i}]`,
     );
     if (sources.get(c.source_id).has_audio)
       filters.push(
@@ -187,7 +218,7 @@ export async function render(
   }
   const cues = mapSubtitles(clips, project.subtitles, voices, project.sources);
   await fs.writeFile(path.join(folder, "subtitles.srt"), toSrt(cues), "utf8");
-  await fs.writeFile(path.join(folder, "subtitles.ass"), toAss(cues, width, height), "utf8");
+  await fs.writeFile(path.join(folder, "subtitles.ass"), toAss(profile.preset === "feishu" ? wrapExportCues(cues,width,height) : cues, width, height), "utf8");
   let video = "[vcat]";
   if (burnSubtitles && cues.length) {
     filters.push(
@@ -200,47 +231,59 @@ export async function render(
     filters.join(";\n"),
     "utf8",
   );
-  const encoding =
-    encoder === "h264_nvenc"
-      ? [
-          "-c:v",
-          "h264_nvenc",
-          "-preset",
-          "p5",
-          "-rc",
-          "vbr",
-          "-cq",
-          String(profile.cq),
-          "-b:v",
-          `${profile.bitrate}k`,
-        ]
-      : ["-c:v", "libx264", "-preset", "medium", "-crf", String(profile.cq)];
-  encoding.push("-maxrate", `${profile.maxrate}k`, "-bufsize", `${profile.maxrate * 2}k`);
-  args.push(
-    "-filter_complex_script",
-    "filters.txt",
-    "-map",
-    video,
-    "-map",
-    audio,
-    "-frames:v",
-    String(clips.reduce((n, c) => n + clipFrames(c), 0) * fps / FPS),
-    "-t",
-    String(outputDuration(clips)),
-    ...encoding,
-    "-pix_fmt",
-    "yuv420p",
-    "-c:a",
-    "aac",
-    "-b:a",
-    `${profile.audioBitrate}k`,
-    "-movflags",
-    "+faststart",
-    "-progress",
-    "pipe:1",
-    "video.mp4",
-  );
-  await runProcess("ffmpeg", args, folder, outputDuration(clips));
+  let size = 0, attempts = 0;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    attempts++;
+    const encoding =
+      encoder === "h264_nvenc"
+        ? [
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            "p5",
+            "-rc",
+            "vbr",
+            "-cq",
+            String(profile.cq),
+            "-b:v",
+            `${profile.bitrate}k`,
+          ]
+        : ["-c:v", "libx264", "-preset", "medium", "-crf", String(profile.cq)];
+    encoding.push("-maxrate", `${profile.maxrate}k`, "-bufsize", `${profile.maxrate * 2}k`);
+    const exportArgs = [...args,
+      "-filter_complex_script",
+      "filters.txt",
+      "-map",
+      video,
+      "-map",
+      audio,
+      "-frames:v",
+      String(clips.reduce((n, c) => n + clipFrames(c), 0) * fps / FPS),
+      "-t",
+      String(outputDuration(clips)),
+      ...encoding,
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-b:a",
+      `${profile.audioBitrate}k`,
+      ...(profile.audioChannels ? ["-ac",String(profile.audioChannels)] : []),
+      "-movflags",
+      "+faststart",
+      "-progress",
+      "pipe:1",
+      "video.mp4",
+    ];
+    await fs.writeFile(path.join(folder,"render-plan.json"),JSON.stringify({profile,clips:plans,early_fps:true,attempts},null,2));
+    await runProcess("ffmpeg", exportArgs, folder, outputDuration(clips));
+    size = (await fs.stat(path.join(folder,"video.mp4"))).size;
+    if (!profile.maxBytes || size < profile.maxBytes) break;
+    if (attempt === 1) throw new APIError("样片仍超过30 MB，请分段导出。文件保留在任务目录中。");
+    profile.bitrate = Math.floor(profile.bitrate * profile.targetBytes / size * .9);
+    profile.maxrate = profile.bitrate;
+    if (profile.bitrate < 80) throw new APIError("样片时长过长，请分段导出以保持可读画质。");
+  }
   const result = await probe(path.join(folder, "video.mp4"));
   if (Math.abs(result.duration - outputDuration(clips)) > 0.1)
     throw new Error("Export duration does not match the edit");
@@ -250,6 +293,8 @@ export async function render(
     height: result.height,
     fps: result.fps,
     export_options: profile,
+    file_size: size,
+    processing: {gpu_scaled_clips:plans.filter(p=>p.gpu_scaling).length,early_fps:true,attempts},
     subtitle_count: cues.length,
     project_revision: project.revision,
   };

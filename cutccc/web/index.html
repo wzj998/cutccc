@@ -411,7 +411,10 @@
           <span>预计时长</span><strong id="exportDuration">00:00.00</strong
           ><span>视频格式</span><strong>MP4 · H.264</strong>
         </div>
-        <div class="export-settings">
+        <label class="export-preset-label" for="exportPreset">导出用途</label>
+        <select id="exportPreset"><option value="standard">标准视频</option><option value="feishu">飞书样片 · 小于30 MB</option></select>
+        <p id="exportPresetHint" class="muted small-text" hidden>直接生成压缩样片，30帧、长边最高768像素，目标约27 MB；长字幕自动断行。</p>
+        <div id="standardExportSettings" class="export-settings">
           <label>帧率<select id="exportFps"><option value="30" selected>30 帧 / 秒（默认）</option><option value="60">60 帧 / 秒</option></select></label>
           <label>分辨率<select id="exportResolution"><option value="480p">480p</option><option value="720p">720p</option><option value="1080p" selected>1080p</option><option value="1440p">1440p · 2K</option><option value="2160p">2160p · 4K</option><option value="source">原素材分辨率</option></select></label>
           <label>画质<select id="exportQuality"><option value="compact">省空间</option><option value="balanced" selected>均衡（推荐）</option><option value="high">高画质</option></select></label>

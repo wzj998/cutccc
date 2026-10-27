@@ -1,6 +1,37 @@
 import { subtitleLayout } from "../web/subtitle-style.js";
 
 const color = (hex) => "&H00" + hex.slice(5, 7) + hex.slice(3, 5) + hex.slice(1, 3);
+const textUnits = text => [...text].reduce((n,c) => n + (/[^\x00-\x7f]/u.test(c) ? 1 : /[MW@#%&]/.test(c) ? .95 : /[\s ilI1.,:;'!|]/.test(c) ? .35 : .65),0);
+export function wrapExportCues(cues,width,height) {
+  return cues.map(cue => {
+    const layout=subtitleLayout(cue.style,width,height), hard=layout.maxWidth/layout.fontPixels, limit=hard*.9;
+    const paragraphs=cue.text.split(/\r\n|\r|\n/).flatMap(paragraph=>{
+      if (textUnits(paragraph) <= hard*.98) return [paragraph];
+      const lines=[[]];
+      const original=paragraph.match(/[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*|[ \t]+|./gu)||[];
+      const tokens=original.flatMap(t=>textUnits(t)>limit?[...t]:[t]);
+      for(const token of tokens){
+        let line=lines.at(-1);
+        const closing=/^[，。！？；：、）》”’]$/u.test(token);
+        if(line.length && textUnits(line.join('')+token)>(closing?hard:limit)){lines.push([]);line=lines.at(-1);}
+        line.push(token);
+      }
+      // Avoid a very short final line while preserving words, punctuation and the exact characters.
+      if(lines.length>1){
+        const last=lines.at(-1),previous=lines.at(-2);
+        while(previous.length>1 && textUnits(last.join(''))<textUnits(previous.join(''))*.55){
+          const count=/^[，。！？；：、）》”’]$/u.test(previous.at(-1))?2:1;
+          if(previous.length<=count)break;
+          const moved=previous.slice(-count);
+          if(textUnits(moved.join('')+last.join(''))>limit)break;
+          last.unshift(...previous.splice(-count));
+        }
+      }
+      return lines.map(line=>line.join(''));
+    });
+    return {...cue,text:paragraphs.join('\n')};
+  });
+}
 function assTime(seconds) {
   const cs = Math.round(seconds * 100);
   return `${Math.floor(cs / 360000)}:${String(Math.floor(cs / 6000) % 60).padStart(2, "0")}:${String(Math.floor(cs / 100) % 60).padStart(2, "0")}.${String(cs % 100).padStart(2, "0")}`;

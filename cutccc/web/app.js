@@ -1972,17 +1972,24 @@ $("transcribeBtn").onclick = async () => {
 };
 const exportOptionsReady = import("/static/export-options.js");
 function selectedExportOptions() {
-  return { fps: Number($("exportFps").value), resolution: $("exportResolution").value, quality: $("exportQuality").value };
+  return $("exportPreset").value === "feishu" ? {preset:"feishu"} :
+    {preset:"standard",fps: Number($("exportFps").value), resolution: $("exportResolution").value, quality: $("exportQuality").value};
 }
 async function updateExportEstimate() {
   const { exportProfile } = await exportOptionsReady;
   const source = state.project?.sources.find(s => s.id === state.project.clips[0]?.source_id);
   if (!source) return;
-  const p = exportProfile(source, selectedExportOptions());
+  const sample = $("exportPreset").value === "feishu";
+  $("standardExportSettings").hidden = sample;
+  $("exportPresetHint").hidden = !sample;
+  let p;
+  try { p = exportProfile(source, selectedExportOptions(), total()); }
+  catch (error) { $("exportEstimate").textContent = error.message; $("confirmExport").disabled = true; return; }
+  $("confirmExport").disabled = false;
   const mb = Math.round(total() * (p.bitrate + p.audioBitrate) / 8 / 1000);
-  $("exportEstimate").textContent = `${p.width} × ${p.height} · ${p.fps} 帧/秒 · 参考大小约 ${mb} MB（实际随画面复杂度变化）`;
+  $("exportEstimate").textContent = `${p.width} × ${p.height} · ${p.fps} 帧/秒 · ${sample ? `目标约 ${mb} MB，完成后校验小于30 MB` : `参考大小约 ${mb} MB（实际随画面复杂度变化）`}`;
 }
-for (const id of ["exportFps", "exportResolution", "exportQuality"]) $(id).onchange = updateExportEstimate;
+for (const id of ["exportPreset", "exportFps", "exportResolution", "exportQuality"]) $(id).onchange = updateExportEstimate;
 $("exportBtn").onclick = async () => {
   try {
     await saveProject();

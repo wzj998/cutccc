@@ -23,7 +23,7 @@ import {
 import { launch, stopProcess } from "./processes.js";
 import { generateWaveform, WAVEFORM_VERSION } from "./waveform.js";
 import { generateSpectrogram, spectrumRegion, SPECTROGRAM_VERSION } from "./spectrogram.js";
-import { exportOptions } from "../web/export-options.js";
+import { exportOptions, exportProfile } from "../web/export-options.js";
 import { openFolder } from "./open-folder.js";
 
 const uuid = () => randomUUID().replaceAll("-", "");
@@ -474,6 +474,8 @@ export class Studio {
         validateEdit(p.sources, p.clips, p.subtitles);
         validateVoiceovers(p.sources, p.clips, p.voiceovers || []);
         if (!p.clips.length) throw new APIError("Add a clip before exporting");
+        try { exportProfile(p.sources.find(s=>s.id===p.clips[0].source_id),options,outputDuration(p.clips)); }
+        catch (e) { throw new APIError(e.message,422); }
       } else throw new APIError("Unknown job type");
       const jid = uuid();
       await fs.mkdir(this.jobDir(jid));

@@ -122,6 +122,7 @@ export async function callTool(base, name, a = {}) {
     case "export_video":
       return apiCall(base, "POST", `/api/projects/${id}/export`, {
         burn_subtitles: a.burn_subtitles ?? true,
+        preset: a.preset,
         fps: a.fps,
         resolution: a.resolution,
         quality: a.quality,

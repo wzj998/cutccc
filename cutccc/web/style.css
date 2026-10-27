@@ -1386,3 +1386,5 @@ dialog p {
 .export-settings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
 .export-settings label { display: grid; gap: 8px; font-size: 12px; }
 .export-settings select { width: 100%; min-width: 0; }
+.export-preset-label { display: block; font-size: 12px; margin: 14px 0 8px; }
+#exportPreset { width: 100%; }

@@ -504,6 +504,49 @@ test("open export folder only accepts completed export jobs and no caller paths"
  assert.equal((await f.request(route,'POST',{})).status,404);
 });
 
+test("direct Feishu sample applies its budget, wraps long captions and leaves the edit intact",{skip:!hasFFmpeg},async t=>{
+  const f=await fixture(t),file=path.join(f.root,'sample.mp4');
+  await capture('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=360x640:r=60:d=1.4','-c:v','libx264',file]);
+  let p=await f.studio.createProject('Sample preset');p=await f.studio.importPath(p.id,file);
+  const sid=p.sources[0].id,text='这是一条用于验证飞书样片自动断行的长字幕，工程中的文字必须保持不变。';
+  p=await f.studio.updateEdit(p.id,{revision:p.revision,clips:p.clips,subtitles:{[sid]:[{start:0,end:1.3,text}]}});
+  const submit=await f.request(`/api/projects/${p.id}/export`,'POST',{preset:'feishu',fps:60,resolution:'2160p'});
+  assert.equal(submit.status,202);assert.equal(submit.body.export_options.fps,30);
+  const done=await waitJob(f,submit.body.id);assert.equal(done.status,'completed',done.message);
+  assert.equal(done.result.fps,30);assert.equal(done.result.export_options.maxBytes,30_000_000);
+  assert.ok(done.result.file_size<30_000_000);assert.equal(done.result.processing.attempts,1);
+  assert.match(await fs.readFile(await f.studio.jobFile(done.id,'subtitles.ass'),'utf8'),/\\N/);
+  assert.equal((await f.studio.getProject(p.id)).subtitles[sid][0].text,text);
+});
+
+test("unsupported GPU decode or scaling falls back to a working software path",{skip:!hasFFmpeg},async t=>{
+  const oldHw=process.env.CUTCCC_EXPORT_HWACCEL,oldEncoder=process.env.CUTCCC_EXPORT_ENCODER,oldScale=process.env.CUTCCC_EXPORT_GPU_SCALE;
+  process.env.CUTCCC_EXPORT_HWACCEL='cuda';process.env.CUTCCC_EXPORT_ENCODER='libx264';delete process.env.CUTCCC_EXPORT_GPU_SCALE;
+  t.after(()=>{for(const [key,value] of [['CUTCCC_EXPORT_HWACCEL',oldHw],['CUTCCC_EXPORT_ENCODER',oldEncoder],['CUTCCC_EXPORT_GPU_SCALE',oldScale]]){if(value===undefined)delete process.env[key];else process.env[key]=value;}});
+  const f=await fixture(t),file=path.join(f.root,'software-only.mkv');
+  await capture('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=160x90:r=30:d=1','-c:v','ffv1',file]);
+  let p=await f.studio.createProject('Fallback');p=await f.studio.importPath(p.id,file);
+  const done=await waitJob(f,(await f.studio.submit(p.id,'export')).id);
+  assert.equal(done.status,'completed',done.message);assert.equal(done.result.processing.gpu_scaled_clips,0);
+  const plan=JSON.parse(await fs.readFile(f.studio.jobDir(done.id,'render-plan.json'),'utf8'));
+  assert.ok(plan.clips[0].fallback);assert.equal(done.result.fps,30);
+});
+
+test("an oversize sample retries the original inputs with a lower budget",{skip:!hasFFmpeg},async t=>{
+  const f=await fixture(t),file=path.join(f.root,'budget.mp4');
+  await capture('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=160x90:r=30:d=1','-c:v','libx264',file]);
+  let p=await f.studio.createProject('Size bound');p=await f.studio.importPath(p.id,file);
+  const run=f.studio.runProcess.bind(f.studio),calls=[];
+  f.studio.runProcess=async(...args)=>{
+    calls.push(args[2]);await run(...args);
+    if(calls.length===1)await fs.appendFile(path.join(args[3],'video.mp4'),Buffer.alloc(30_000_000));
+  };
+  const done=await waitJob(f,(await f.studio.submit(p.id,'export',{preset:'feishu'})).id);
+  assert.equal(done.status,'completed',done.message);assert.equal(done.result.processing.attempts,2);
+  assert.ok(done.result.file_size<30_000_000);assert.ok(done.result.export_options.bitrate<2500);
+  assert.equal(calls[0][calls[0].indexOf('-i')+1],calls[1][calls[1].indexOf('-i')+1]);
+});
+
 test("waveform API extracts real audio once, caches it and preserves the project", {skip: !hasFFmpeg}, async (t) => {
   const f = await fixture(t);
   let p = await f.studio.createProject("Waveform cache");
