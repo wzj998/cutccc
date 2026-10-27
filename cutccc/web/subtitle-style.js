@@ -1,8 +1,8 @@
 // Shared by the browser preview and Node.js export; font sizes use a 1080-high canvas.
 export const DEFAULT_STYLE = Object.freeze({
-  fontFamily: "Microsoft YaHei", fontSize: 36, color: "#ffffff",
+  fontFamily: "Microsoft YaHei", fontSize: 40, color: "#ffffff",
   bold: true, italic: false, outlineColor: "#000000", outlineWidth: 2,
-  position: "bottom-center", marginX: 6, marginY: 8,
+  position: "bottom-center", marginX: 6, marginY: 12,
 });
 export const FONTS = ["Microsoft YaHei", "Noto Sans CJK SC", "Arial"];
 export const POSITIONS = [

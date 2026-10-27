@@ -25,7 +25,7 @@ test("cue styles survive clipping and reuse while SRT stays plain text", () => {
   assert.doesNotMatch(toSrt(mapped), /style|color|ffcc55/);
   assert.equal(subtitleLayout(style, 1080, 1920).alignment, 8);
   assert.match(toAss(mapped, 1080, 1920), /PlayResY: 1920/);
-  assert.match(toAss(mapped, 1080, 1920), /\\pos\(540\.000,153\.600\)/);
+  assert.match(toAss(mapped, 1080, 1920), /\\pos\(540\.000,230\.400\)/);
   assert.match(assText("literal {\\b1}\nnext"), /\\\{/);
   assert.ok(assText("\\N").includes("\u2060"));
 });

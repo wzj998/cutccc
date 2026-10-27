@@ -1,6 +1,8 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 let subtitleStyle;
+let captionTiming;
+const captionTimingReady = import("/static/caption-timing.js").then(module => { captionTiming = module; });
 const subtitleStyleReady = import("/static/subtitle-style.js").then(module => { subtitleStyle = module; });
 let editHistory;
 const editHistoryReady = import("/static/edit-history.js").then(({EditHistory}) => { editHistory = new EditHistory(); });
@@ -568,7 +570,7 @@ function renderTimeline() {
       if (lane < 0) lane = lanes.length;
       lanes[lane] = c.end;
       const selected = state.subtitleSelection.has(`${c.sourceId}:${c.index}`);
-      return `<div class="caption-block ${selected ? "selected" : ""}" data-caption-occurrence="${c.occurrence}" data-caption-key="${c.sourceId}:${c.index}" role="button" tabindex="0" aria-pressed="${selected}" aria-label="编辑字幕：${esc(c.text)}" style="left:${c.start * state.zoom}px;width:${(c.end - c.start) * state.zoom}px;top:${3 + lane * 26}px" title="点击编辑内容和样式：${esc(c.text)}">${esc(c.text)}</div>`;
+      return `<div class="caption-block ${selected ? "selected" : ""}" data-caption-occurrence="${c.occurrence}" data-caption-key="${c.sourceId}:${c.index}" role="button" tabindex="0" aria-pressed="${selected}" aria-label="编辑字幕：${esc(c.text)}" style="left:${c.start * state.zoom}px;width:${(c.end - c.start) * state.zoom}px;top:${3 + lane * 26}px" title="拖动中间移动字幕；拖动两端调整时长：${esc(c.text)}"><span class="caption-resize-handle start" data-resize-caption="start" title="拖动调整字幕开始时间"></span><span class="caption-block-text">${esc(c.text)}</span><span class="caption-resize-handle end" data-resize-caption="end" title="拖动调整字幕结束时间"></span></div>`;
     })
     .join("");
   const panel = scroll.closest(".timeline-panel");
@@ -764,7 +766,7 @@ function renderSubtitles() {
     ? entries
         .map(
           ({cue: c, index: i, sourceId, key, name}) =>
-            `<div class="subtitle-row ${state.subtitleSelection.has(key) ? "selected" : ""}" data-cue="${i}" data-cue-source="${sourceId}"><div class="subtitle-select-line"><input type="checkbox" data-select-cue="${key}" aria-label="选择字幕 ${i + 1}" ${state.subtitleSelection.has(key) ? "checked" : ""}><span title="${esc(name)}">${esc(name)}</span><button class="button small" data-edit-style="${key}">样式</button></div><div class="subtitle-placement">${placementLabel(key)}</div><div class="subtitle-clock-label">原素材起止 / 秒</div><div class="subtitle-time"><span class="number">${String(i + 1).padStart(2, "0")}</span><input type="number" min="0" step="0.001" data-field="start" aria-label="字幕 ${i + 1} 原素材开始时间" value="${c.start.toFixed(3)}"><span class="separator">—</span><input type="number" min="0" step="0.001" data-field="end" aria-label="字幕 ${i + 1} 原素材结束时间" value="${c.end.toFixed(3)}"><button class="icon-button" data-remove-cue="${i}" title="删除字幕" aria-label="删除字幕 ${i + 1}">×</button></div><textarea data-field="text" aria-label="字幕 ${i + 1} 文字">${esc(c.text)}</textarea></div>`,
+            `<div class="subtitle-row ${state.subtitleSelection.has(key) ? "selected" : ""}" data-cue="${i}" data-cue-source="${sourceId}"><div class="subtitle-select-line"><input type="checkbox" data-select-cue="${key}" aria-label="选择字幕 ${i + 1}" ${state.subtitleSelection.has(key) ? "checked" : ""}><span title="${esc(name)}">${String(i + 1).padStart(2, "0")} · ${esc(name)}</span><button class="icon-button" data-remove-cue="${i}" title="删除字幕" aria-label="删除字幕 ${i + 1}">×</button></div><button class="subtitle-open" data-edit-style="${key}" aria-label="编辑字幕 ${i + 1}">${esc(c.text)}</button><div class="subtitle-placement">${placementLabel(key)}</div><div class="subtitle-clock-label">原素材 ${time(c.start)} – ${time(c.end)}</div></div>`,
         )
         .join("")
     : '<p class="muted" style="margin-top:18px">生成字幕后，可以在这里逐条校对文字和时间，也可以点击 ＋ 手动添加。</p>';
@@ -787,7 +789,9 @@ function openTimelineCaption(occurrence) {
   // Seek the clicked occurrence, including reused clips and repeated voiceovers.
   seekOutput(mapped.start + Math.min(.05, (mapped.end - mapped.start) / 2), false);
   if (mapped.sourceId !== state.source) $("subtitleScope").value = "project";
+  selectLibraryTab("captions");
   document.querySelector('[data-tab="subtitles"]').click();
+  $("captionStyleEditor").open = true;
   renderSubtitles();
   renderTimeline();
   const row = [...$("subtitleList").querySelectorAll("[data-cue]")].find(
@@ -795,7 +799,7 @@ function openTimelineCaption(occurrence) {
   );
   if (row) {
     row.scrollIntoView({block: "center", inline: "nearest"});
-    row.querySelector("textarea").focus({preventScroll: true});
+    row.querySelector(".subtitle-open").focus({preventScroll: true});
   }
 }
 function captionMoveContext() {
@@ -839,22 +843,24 @@ function selectTimelineCaption(block, event) {
 function startCaptionGesture(event) {
   if (event.button !== 0 || !event.isPrimary || !state.project || state.busy || state.saving || state.captionGesture) return;
   const block = event.target.closest("[data-caption-occurrence]");
+  const edge = event.target.closest("[data-resize-caption]")?.dataset.resizeCaption;
   if (block && (event.ctrlKey || event.metaKey || event.shiftKey)) { event.preventDefault(); return; }
   event.preventDefault();
   pause();
   const track = $("captionTrack"), rect = track.getBoundingClientRect();
-  if (block && !state.subtitleSelection.has(block.dataset.captionKey)) {
+  if (block && (edge || !state.subtitleSelection.has(block.dataset.captionKey))) {
     state.subtitleSelection = new Set([block.dataset.captionKey]);
     state.subtitleSelectionProject = state.project.id;
     renderSubtitles();
   }
-  const context = block ? captionMoveContext() : null;
+  const context = edge ? captionTiming?.captionResizeContext(state.project,
+    mappedCues().find(c => c.occurrence === block.dataset.captionOccurrence), edge) : block ? captionMoveContext() : null;
   if (block && !context) return;
   const overlay = document.createElement("div");
   overlay.className = block ? "caption-move-label" : "caption-selection-box";
   overlay.hidden = true;
   (block ? document.body : track).append(overlay);
-  state.captionGesture = {kind: block ? "move" : "box", pointerId: event.pointerId,
+  state.captionGesture = {kind: edge ? "resize" : block ? "move" : "box", pointerId: event.pointerId,
     projectId: state.project.id, occurrence: block?.dataset.captionOccurrence, context, overlay,
     startX: event.clientX - rect.left, startY: event.clientY - rect.top + track.scrollTop,
     clientX: event.clientX, clientY: event.clientY, delta: 0, moved: false,
@@ -871,7 +877,29 @@ function moveCaptionGesture(event) {
   gesture.overlay.hidden = false;
   const track = $("captionTrack"), rect = track.getBoundingClientRect();
   const x = event.clientX - rect.left, y = event.clientY - rect.top + track.scrollTop;
-  if (gesture.kind === "move") {
+  if (gesture.kind === "resize") {
+    const context = gesture.context;
+    gesture.delta = Math.max(context.minimum, Math.min(context.maximum,
+      Math.round((x - gesture.startX) / state.zoom * 30) / 30));
+    const point = context.edge === "start" ? context.mapped.start : context.mapped.end;
+    if (!event.altKey) {
+      const edges = [0];
+      for (const clip of state.project.clips) edges.push(edges.at(-1) + duration(clip));
+      let nearest = 8 / state.zoom;
+      const requested = gesture.delta;
+      for (const edge of edges) {
+        const delta = edge - point, distance = Math.abs(delta - requested);
+        if (delta >= context.minimum && delta <= context.maximum && distance < nearest) { gesture.delta = delta; nearest = distance; }
+      }
+    }
+    const start = context.mapped.start + (context.edge === "start" ? gesture.delta : 0);
+    const end = context.mapped.end + (context.edge === "end" ? gesture.delta : 0);
+    const block = [...track.querySelectorAll("[data-caption-occurrence]")].find(b => b.dataset.captionOccurrence === gesture.occurrence);
+    if (block) { block.classList.add("dragging"); block.style.left = `${start * state.zoom}px`; block.style.width = `${(end - start) * state.zoom}px`; }
+    gesture.overlay.textContent = `${time(start)} – ${time(end)} · 时长 ${time(end - start)}`;
+    gesture.overlay.style.left = `${Math.max(8, Math.min(innerWidth - 260, event.clientX + 12))}px`;
+    gesture.overlay.style.top = `${Math.max(8, event.clientY - 34)}px`;
+  } else if (gesture.kind === "move") {
     gesture.delta = Math.max(gesture.context.minimum, Math.min(gesture.context.maximum,
       Math.round((x - gesture.startX) / state.zoom * 30) / 30));
     let snapped = false;
@@ -923,12 +951,25 @@ function finishCaptionGesture(event, cancel = false) {
   state.suppressCaptionClick = true;
   setTimeout(() => { state.suppressCaptionClick = false; }, 0);
   if (cancel || event?.type === "pointercancel" || state.project?.id !== gesture.projectId) {
+    if (gesture.kind === "resize") renderTimeline();
     if (gesture.kind === "box" && state.project?.id === gesture.projectId) {
       state.subtitleSelection = gesture.initialSelection; renderSubtitles();
     }
     return;
   }
-  if (gesture.kind === "move") {
+  if (gesture.kind === "resize") {
+    const context = gesture.context;
+    if (gesture.moved && Math.abs(gesture.delta) > .000001) {
+      const cue = state.project.subtitles[context.sourceId][context.index];
+      cue[context.edge] = captionTiming.resizedCaptionTime(context, gesture.delta);
+      markDirty();
+      seekOutput(context.offset + cue[context.edge] + (context.edge === "start" ? .01 : -.01), false);
+    }
+    selectLibraryTab("captions");
+    document.querySelector('[data-tab="subtitles"]').click();
+    $("captionStyleEditor").open = true;
+    renderSubtitles(); renderTimeline();
+  } else if (gesture.kind === "move") {
     if (gesture.moved) commitCaptionMove(gesture.context, gesture.delta, gesture.occurrence);
     else openTimelineCaption(gesture.occurrence);
   } else {
@@ -961,6 +1002,8 @@ function renderCaptionStyleEditor() {
   if (entries.length === 1 && $("captionFocusedText").value !== entries[0].cue.text)
     $("captionFocusedText").value = entries[0].cue.text;
   if (entries.length === 1) {
+    $("captionSourceStart").value = entries[0].cue.start;
+    $("captionSourceEnd").value = entries[0].cue.end;
     $("captionTimeShift").value = entries[0].cue.shift || 0;
     const placements = mappedCues().filter(c => `${c.sourceId}:${c.index}` === entries[0].key);
     const active = placements.find(c => c.start <= Number($("fullscreenSeek").value) && c.end > Number($("fullscreenSeek").value)) || placements[0];
@@ -1622,24 +1665,34 @@ $("voiceoverList").onclick = (e) => {
   renderVoiceovers();
   renderTimeline();
 };
-for (const tab of document.querySelectorAll(".tab"))
+function selectLibraryTab(name) {
+  for (const tab of document.querySelectorAll("[data-library-tab]")) {
+    const active = tab.dataset.libraryTab === name;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+  }
+  $("materialsPanel").hidden = name !== "materials";
+  $("subtitleListPanel").hidden = name !== "captions";
+}
+for (const tab of document.querySelectorAll("[data-library-tab]")) {
+  tab.onclick = () => selectLibraryTab(tab.dataset.libraryTab);
+  tab.onkeydown = event => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const name = event.key === "Home" ? "materials" : event.key === "End" ? "captions" : tab.dataset.libraryTab === "materials" ? "captions" : "materials";
+    selectLibraryTab(name);
+    document.querySelector(`[data-library-tab="${name}"]`).focus();
+  };
+}
+for (const tab of document.querySelectorAll(".inspector-tabs .tab"))
   tab.onclick = () => {
     document
-      .querySelectorAll(".tab")
+      .querySelectorAll(".inspector-tabs .tab")
       .forEach((t) => t.classList.toggle("active", t === tab));
     $("clipPanel").hidden = tab.dataset.tab !== "clip";
     $("subtitlesPanel").hidden = tab.dataset.tab !== "subtitles";
   };
-$("subtitleList").oninput = (e) => {
-  const row = e.target.closest("[data-cue]"),
-    field = e.target.dataset.field;
-  if (!row || !field) return;
-  const cue = state.project.subtitles[row.dataset.cueSource][Number(row.dataset.cue)];
-  cue[field] = field === "text" ? e.target.value : Number(e.target.value);
-  if (field === "text") renderCaptionStyleEditor();
-  markDirty(`cue:${row.dataset.cueSource}:${row.dataset.cue}:${field}`);
-  renderTimeline();
-};
 $("subtitleList").onclick = (e) => {
   const styleButton = e.target.closest("[data-edit-style]");
   if (styleButton) {
@@ -1647,6 +1700,7 @@ $("subtitleList").onclick = (e) => {
     const entry = selectedSubtitleEntries()[0];
     previewSubtitle(entry.sourceId, entry.index);
     renderSubtitles();
+    document.querySelector('[data-tab="subtitles"]').click();
     $("captionStyleEditor").open = true;
     $("captionStyleEditor").scrollIntoView({block: "nearest"});
     return;
@@ -1674,6 +1728,13 @@ $("subtitleList").onchange = (event) => {
   else state.subtitleSelection.delete(key);
   event.target.closest("[data-cue]").classList.toggle("selected", event.target.checked);
   renderCaptionStyleEditor();
+  document.querySelector('[data-tab="subtitles"]').click();
+  $("captionStyleEditor").open = true;
+};
+$("subtitleList").onkeydown = event => {
+  if (event.key !== "Delete" || event.target.matches("input") || event.repeat || state.busy) return;
+  const row = event.target.closest("[data-cue]");
+  if (row) { event.preventDefault(); event.stopPropagation(); row.querySelector("[data-remove-cue]").click(); }
 };
 $("subtitleScope").onchange = renderSubtitles;
 $("captionTrack").onclick = (event) => {
@@ -1716,14 +1777,31 @@ $("captionFocusedText").oninput = (event) => {
   const row = [...$("subtitleList").querySelectorAll("[data-cue]")].find(
     row => row.dataset.cueSource === entry.sourceId && Number(row.dataset.cue) === entry.index,
   );
-  if (row) row.querySelector("textarea").value = entry.cue.text;
+  if (row) row.querySelector(".subtitle-open").textContent = entry.cue.text;
   markDirty(`cue:${entry.sourceId}:${entry.index}:text`);
   renderTimeline();
 };
+for (const [id, field] of [["captionSourceStart", "start"], ["captionSourceEnd", "end"]]) {
+  $(id).onchange = event => {
+    const entries = selectedSubtitleEntries();
+    if (entries.length !== 1) return;
+    const {cue, index, sourceId} = entries[0], value = Number(event.target.value);
+    const cues = state.project.subtitles[sourceId], source = state.project.sources.find(s => s.id === sourceId);
+    const low = field === "start" ? (cues[index - 1]?.end ?? 0) : cue.start + 1 / 30;
+    const high = field === "start" ? cue.end - 1 / 30 : (cues[index + 1]?.start ?? source.duration);
+    if (!event.target.value || !Number.isFinite(value) || value < low || value > high) {
+      event.target.value = cue[field]; toast("时间需在素材范围内，且不能与相邻字幕重叠。", true); return;
+    }
+    if (value === cue[field]) return;
+    cue[field] = value;
+    markDirty(); renderSubtitles(); renderTimeline();
+  };
+}
 $("selectAllCaptions").onclick = () => {
   for (const entry of subtitleEntries()) state.subtitleSelection.add(entry.key);
   renderSubtitles();
   $("captionStyleEditor").open = true;
+  document.querySelector('[data-tab="subtitles"]').click();
 };
 $("clearCaptionSelection").onclick = () => { state.subtitleSelection.clear(); renderSubtitles(); };
 $("captionStyleFields").oninput = updateCaptionStyleField;
@@ -1766,6 +1844,7 @@ function addCaption() {
   const index = cues.indexOf(cue);
   state.subtitleSelection = new Set([`${s.id}:${index}`]);
   markDirty();
+  selectLibraryTab("captions");
   document.querySelector('[data-tab="subtitles"]').click();
   previewSubtitle(s.id, index);
   renderSubtitles();
@@ -1853,7 +1932,7 @@ function handleEditorKeydown(e) {
     return;
   }
   if (
-    e.target.matches("input,textarea,select") ||
+    e.target.matches("input,textarea,select,button") ||
     e.target.isContentEditable ||
     e.isComposing ||
     $("exportDialog").open
@@ -1936,7 +2015,7 @@ async function health() {
 }
 (async () => {
   try {
-    await Promise.all([subtitleStyleReady, editHistoryReady]);
+    await Promise.all([subtitleStyleReady, editHistoryReady, captionTimingReady]);
     setAudioView(localStorage.getItem("cutccc-audio-view") || "waveform");
     await health();
     await projectOptions();

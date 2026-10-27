@@ -234,6 +234,20 @@ kbd {
   border-right: 1px solid var(--line);
   min-height: 0;
 }
+.library-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.library-tabs { display: flex; flex-shrink: 0; border-bottom: 1px solid var(--line); margin: 0 -16px 14px; }
+.library-tab { flex: 1; min-width: 0; padding: 12px 4px; background: transparent; color: var(--muted); border-bottom: 2px solid transparent; font-size: 12px; }
+.library-tab.active { color: var(--text); border-color: var(--accent); }
+.library-tab span { font-size: 10px; color: var(--muted); }
+.subtitle-list-panel { overflow: auto; padding-bottom: 12px; }
+.subtitle-list-panel > * { flex-shrink: 0; }
+.subtitle-recognition { font-size: 11px; color: var(--muted); }
+.subtitle-recognition summary { cursor: pointer; margin: 0 0 12px; }
+.subtitle-open { display: block; text-align: left; background: transparent; color: var(--text); padding: 5px 2px; width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+.subtitle-open:hover { color: var(--accent); }
+.subtitle-open:focus-visible { outline: 1px solid var(--accent); }
+.caption-source-times { margin-top: 12px; gap: 8px; }
+.subtitle-list-panel .subtitle-add-toolbar { background: #16191a; }
 .panel-heading {
   display: flex;
   justify-content: space-between;
@@ -820,6 +834,11 @@ kbd {
 .caption-block:hover, .caption-block:focus-visible { background: #52566d; outline: 1px solid #c4c2ee; outline-offset: -1px; }
 .caption-block.selected { background: #365744; border-left-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .caption-block.dragging { cursor: grabbing; opacity: .8; z-index: 4; }
+.caption-block-text { pointer-events: none; }
+.caption-resize-handle { position: absolute; top: 0; bottom: 0; width: min(6px, 25%); cursor: ew-resize; z-index: 2; touch-action: none; }
+.caption-resize-handle.start { left: 0; }
+.caption-resize-handle.end { right: 0; }
+.caption-resize-handle:hover { background: #d2e9b9; }
 .caption-selection-box { position: absolute; border: 1px solid var(--accent); background: #aff2bd22; pointer-events: none; z-index: 5; }
 .caption-move-label { position: fixed; padding: 6px 9px; border-radius: 5px; background: #18251fee; color: var(--accent); font: 11px monospace; pointer-events: none; z-index: 30; }
 .playhead {
@@ -1286,6 +1305,8 @@ dialog p {
     grid-row: 1/3;
     padding: 16px 10px;
   }
+  .library-tabs { margin-left: -10px; margin-right: -10px; }
+  .subtitle-list-panel { max-height: 960px; }
   .center-stage {
     grid-column: 2;
     grid-row: 1;

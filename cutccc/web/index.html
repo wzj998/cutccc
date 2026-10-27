@@ -47,7 +47,7 @@
     <main class="workspace">
       <aside class="library">
         <div class="panel-heading">
-          <h2>素材库</h2>
+          <h2>项目</h2>
           <button
             id="newProjectBtn"
             class="icon-button"
@@ -61,6 +61,11 @@
         ><select id="projectSelect">
           <option value="">选择项目</option>
         </select>
+        <div class="library-tabs" role="tablist" aria-label="素材与字幕">
+          <button id="materialsTab" class="library-tab active" data-library-tab="materials" role="tab" aria-selected="true" aria-controls="materialsPanel">素材控制</button>
+          <button id="subtitleListTab" class="library-tab" data-library-tab="captions" role="tab" aria-selected="false" aria-controls="subtitleListPanel" tabindex="-1">字幕列表 <span id="subtitleCount">0</span></button>
+        </div>
+        <div id="materialsPanel" class="library-panel" role="tabpanel" aria-labelledby="materialsTab">
         <button id="importBtn" class="button import-button">＋ 导入视频</button
         ><input
           id="fileInput"
@@ -75,6 +80,38 @@
         <div id="sourceList" class="source-list">
           <div class="muted empty-library">
             素材只保存在你的电脑上。<br />导入视频，开始一次剪辑。
+          </div>
+        </div>
+        </div>
+        <div id="subtitleListPanel" class="library-panel subtitle-list-panel" role="tabpanel" aria-labelledby="subtitleListTab" hidden>
+          <div class="subtitle-add-toolbar">
+            <button id="addCaptionBtn" class="button secondary" title="在当前素材的预览位置添加字幕" disabled>＋ 新增字幕到时间轴</button>
+          </div>
+          <details class="subtitle-recognition"><summary>自动生成字幕</summary>
+          <div class="section-label">为当前素材生成字幕</div>
+          <label class="field-label" for="recognitionLanguage">识别语言</label>
+          <select id="recognitionLanguage">
+            <option value="auto">中英自动识别 · 保留原文</option>
+            <option value="Chinese">中文</option>
+            <option value="English">英文原文</option>
+          </select>
+          <button id="transcribeBtn" class="button primary full" disabled>
+            ✧ 自动识别人声并生成字幕
+          </button>
+          <div id="modelHint" class="muted model-hint">正在检查字幕模型…</div>
+          </details>
+          <div class="subtitle-selection-tools">
+            <select id="subtitleScope" aria-label="字幕列表范围">
+              <option value="source">当前素材</option><option value="project">整个工程</option>
+            </select>
+            <button id="selectAllCaptions" class="button small">全选列表</button>
+            <button id="clearCaptionSelection" class="button small">取消选择</button>
+          </div>
+          <div class="subtitle-list-heading">
+            <span>原素材时间（不含时间轴偏移）</span>
+          </div>
+          <div id="subtitleList" class="subtitle-list">
+            <p class="muted">生成字幕后，可以在这里逐条校对文字和时间。</p>
           </div>
         </div>
         <div class="library-bottom">
@@ -262,7 +299,7 @@
         <div class="inspector-tabs">
           <button class="tab active" data-tab="clip">片段</button
           ><button class="tab" data-tab="subtitles">
-            字幕 <span id="subtitleCount">0</span>
+            编辑
           </button>
         </div>
         <div id="clipPanel" class="inspector-content">
@@ -324,34 +361,14 @@
           class="inspector-content subtitles-panel"
           hidden
         >
-          <div class="subtitle-add-toolbar">
-            <button id="addCaptionBtn" class="button secondary" title="在当前素材的预览位置添加字幕" disabled>＋ 新增字幕到时间轴</button>
-          </div>
-          <div class="section-label">为当前素材生成字幕</div>
-          <label class="field-label" for="recognitionLanguage">识别语言</label>
-          <select id="recognitionLanguage">
-            <option value="auto">中英自动识别 · 保留原文</option>
-            <option value="Chinese">中文</option>
-            <option value="English">英文原文</option>
-          </select>
-          <button id="transcribeBtn" class="button primary full" disabled>
-            ✧ 自动识别人声并生成字幕
-          </button>
-          <div id="modelHint" class="muted model-hint">正在检查字幕模型…</div>
-          <div class="subtitle-selection-tools">
-            <select id="subtitleScope" aria-label="字幕列表范围">
-              <option value="source">当前素材</option><option value="project">整个工程</option>
-            </select>
-            <button id="selectAllCaptions" class="button small">全选列表</button>
-            <button id="clearCaptionSelection" class="button small">取消选择</button>
-          </div>
-          <details id="captionStyleEditor" class="caption-style-editor">
-            <summary>字幕编辑 · <span id="captionSelectionCount">未选择字幕</span></summary>
-            <label id="captionFocusedContent" class="caption-focused-content" hidden>
-              字幕内容<textarea id="captionFocusedText" rows="2" aria-label="当前选中的字幕内容"></textarea>
+          <details id="captionStyleEditor" class="caption-style-editor" open>
+            <summary>当前选择 · <span id="captionSelectionCount">未选择字幕</span></summary>
+            <div id="captionFocusedContent" class="caption-focused-content" hidden>
+              <label for="captionFocusedText">字幕内容</label><textarea id="captionFocusedText" rows="3" aria-label="当前选中的字幕内容"></textarea>
+              <div class="trim-fields caption-source-times"><label>原素材开始 / 秒<input id="captionSourceStart" type="number" min="0" step="0.001" /></label><label>原素材结束 / 秒<input id="captionSourceEnd" type="number" min="0" step="0.001" /></label></div>
               <span id="captionTimelineRange" class="muted"></span>
               <span class="caption-shift-field">时间轴偏移 / 秒<input id="captionTimeShift" type="number" step="0.01" min="-86400" max="86400" title="仅移动字幕的出现时间，原素材时间保留作参考" /></span>
-            </label>
+            </div>
             <p class="muted" id="captionStyleHint">勾选字幕可批量编辑；修改一项只影响该项。</p>
             <fieldset id="captionStyleFields" disabled>
               <div class="caption-style-grid">
@@ -374,12 +391,7 @@
               <button id="resetCaptionStyle" class="button small full">所选字幕恢复默认样式</button>
             </fieldset>
           </details>
-          <div class="subtitle-list-heading">
-            <span>原素材时间（不含时间轴偏移）</span>
-          </div>
-          <div id="subtitleList" class="subtitle-list">
-            <p class="muted">生成字幕后，可以在这里逐条校对文字和时间。</p>
-          </div>
+
         </div>
         <div class="jobs-panel">
           <div class="section-label">
