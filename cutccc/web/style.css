@@ -701,7 +701,7 @@ kbd {
 .timeline-scroll {
   height: calc(145px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px) + var(--audio-track-height, 0px));
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: auto;
   margin-left: 22px;
   margin-right: 22px;
   border-left: 1px solid #404b4d;
@@ -751,10 +751,21 @@ kbd {
 }
 .clip-track {
   height: calc(66px + var(--clip-audio-height, 28px));
-  display: flex;
+  display: block;
   position: relative;
-  padding-top: 7px;
+  padding-top: 0;
 }
+.track-row { position: relative; }
+.track-row-header { height: 22px; position: relative; z-index: 11; background: #192022; border-bottom: 1px solid #2a3334; }
+.track-row-header > div { display: flex; align-items: center; gap: 10px; height: 22px; width: 164px; position: sticky; left: 0; padding-left: 6px; color: var(--muted); font-size: 10px; }
+.track-delete-button { padding: 0 6px; background: transparent; color: #b5bdbb; font-size: 16px; }
+.track-delete-button:hover { color: #ffb6ae; }
+.track-row-header.selected { color: var(--accent); background: #23372b; }
+.track-content { position: relative; }
+.video-track-content > .timeline-clip { position: absolute; top: 7px; }
+.track-row.drop-target > .track-content { box-shadow: inset 0 0 0 1px var(--accent); background: #20342788; }
+.audio-view-toolbar { flex-wrap: wrap; height: auto; min-height: 32px; }
+#newTrackType { width: 96px; }
 .timeline-clip {
   height: calc(55px + var(--clip-audio-height, 28px));
   border: 0;
@@ -847,8 +858,7 @@ kbd {
   position: relative;
   background: #131819;
   border-radius: 4px;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: visible;
 }
 .caption-block {
   cursor: grab;
@@ -868,7 +878,7 @@ kbd {
 }
 .caption-block:hover, .caption-block:focus-visible { background: #52566d; outline: 1px solid #c4c2ee; outline-offset: -1px; }
 .caption-block.selected { background: #365744; border-left-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.caption-block.dragging { cursor: grabbing; opacity: .8; z-index: 4; }
+.caption-block.dragging { cursor: grabbing; opacity: .8; z-index: 4; pointer-events: none; }
 .caption-block-text { pointer-events: none; }
 .caption-resize-handle { position: absolute; top: 0; bottom: 0; width: min(6px, 25%); cursor: ew-resize; z-index: 2; touch-action: none; }
 .caption-resize-handle.start { left: 0; }

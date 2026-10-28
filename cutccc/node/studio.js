@@ -26,6 +26,7 @@ import { generateSpectrogram, spectrumRegion, SPECTROGRAM_VERSION } from "./spec
 import { exportOptions, exportProfile } from "../web/export-options.js";
 import { openFolder } from "./open-folder.js";
 import {projectDuration} from "../web/audio-tracks.js";
+import {getTracks,hasFreeVideo,videoDuration,materializeVideoPositions} from '../web/tracks.js';
 
 const uuid = () => randomUUID().replaceAll("-", "");
 const now = () => Date.now() / 1000;
@@ -283,8 +284,16 @@ export class Studio {
           };
         p.sources.push(source);
         p.subtitles[sid] = [];
-        p.clips.push({ source_id: sid, start: 0, end: metadata.duration });
-        validateEdit(p.sources, p.clips, p.subtitles);
+        const clip={source_id:sid,start:0,end:metadata.duration};
+        const tracks=getTracks(p),hasDefault=tracks.some(t=>t.id==='video-main'&&t.type==='video');
+        if(hasFreeVideo(p)||(p.tracks!==undefined&&!hasDefault)) {
+          const start=videoDuration(p);materializeVideoPositions(p);
+          let track=getTracks(p).find(t=>t.type==='video');
+          if(!track){p.tracks||=[];track={id:'video-main',type:'video',name:'视频1'};p.tracks.push(track);}
+          clip.track_id=track.id;clip.timeline_start=start;
+        }
+        p.clips.push(clip);
+        validateEdit(p.sources, p.clips, p.subtitles,p.tracks);
         return this.save(p);
       });
     } catch (e) {
@@ -317,7 +326,7 @@ export class Studio {
       throw new APIError("Source file not found", 404);
     return file;
   }
-  async updateEdit(id, { revision, clips, subtitles, title, voiceovers }) {
+  async updateEdit(id, { revision, clips, subtitles, title, voiceovers, tracks }) {
     return this.exclusive(async () => {
       const p = await this.getProject(id);
       if (p.revision !== revision)
@@ -325,9 +334,10 @@ export class Studio {
           "Project changed in another client. Reload before saving.",
           409,
         );
-      validateEdit(p.sources, clips, subtitles);
+      const selectedTracks=tracks===null?undefined:tracks===undefined?p.tracks:tracks;
+      validateEdit(p.sources, clips, subtitles,selectedTracks);
       voiceovers = voiceovers ?? p.voiceovers ?? [];
-      validateVoiceovers(p.sources, clips, voiceovers);
+      validateVoiceovers(p.sources, clips, voiceovers,selectedTracks);
       if (title !== undefined && title !== null) p.title = titleText(title);
       for (const s of p.sources)
         if (
@@ -336,6 +346,7 @@ export class Studio {
         )
           s.subtitle_version++;
       p.clips = structuredClone(clips);
+      if(selectedTracks===undefined)delete p.tracks;else p.tracks=structuredClone(selectedTracks);
       p.voiceovers = structuredClone(voiceovers);
       p.subtitles = Object.fromEntries(
         p.sources.map((s) => [s.id, structuredClone(subtitles[s.id] || [])]),
@@ -359,8 +370,8 @@ export class Studio {
       p.voiceovers = (p.voiceovers || []).filter(v => v.source_id !== sid);
       p.sources = p.sources.filter(s => s.id !== sid);
       delete p.subtitles[sid];
-      validateEdit(p.sources, p.clips, p.subtitles);
-      try { validateVoiceovers(p.sources, p.clips, p.voiceovers); }
+      validateEdit(p.sources, p.clips, p.subtitles,p.tracks);
+      try { validateVoiceovers(p.sources, p.clips, p.voiceovers,p.tracks); }
       catch { throw new APIError("移除后，其他音频将超出剩余视频时长，请先调整这些音频。"); }
       const backups = this.projectDir(id, "backups");
       await fs.mkdir(backups, {recursive:true});
@@ -482,8 +493,8 @@ export class Studio {
       } else if (kind === "export") {
         try { options = exportOptions(options); }
         catch (e) { throw new APIError(e.message, 422); }
-        validateEdit(p.sources, p.clips, p.subtitles);
-        validateVoiceovers(p.sources, p.clips, p.voiceovers || []);
+        validateEdit(p.sources, p.clips, p.subtitles,p.tracks);
+        validateVoiceovers(p.sources, p.clips, p.voiceovers || [],p.tracks);
         if (!p.clips.length && !(p.voiceovers||[]).some(v=>v.detached)) throw new APIError("Add a clip before exporting");
         try { exportProfile(p.sources.find(s=>s.id===(p.clips[0]?.source_id||p.voiceovers[0]?.source_id)),options,projectDuration(p)); }
         catch (e) { throw new APIError(e.message,422); }
@@ -637,12 +648,14 @@ export class Studio {
               "Subtitles were edited during transcription; generated results retained in task files",
               409,
             );
+          let track;
+          if(current.tracks!==undefined){track=getTracks(current).find(t=>t.type==='subtitle');if(!track){let number=1;while(current.tracks.some(t=>t.name==='字幕'+number))number++;track={id:'subtitle-main',type:'subtitle',name:'字幕'+number};}if(!current.tracks.some(t=>t.id===track.id))current.tracks.push(track);}
           const subtitles = {
             ...current.subtitles,
-            [sourceId]: [...generated.cues, ...(current.subtitles[sourceId] || []).filter(c => c.timeline_offset !== undefined)]
+            [sourceId]: [...generated.cues.map(c=>({...c,...(track?{track_id:track.id}:{})})), ...(current.subtitles[sourceId] || []).filter(c => c.timeline_offset !== undefined)]
               .sort((a,b) => a.start - b.start || Number(a.timeline_offset !== undefined) - Number(b.timeline_offset !== undefined)),
           };
-          validateEdit(current.sources, current.clips, subtitles);
+          validateEdit(current.sources, current.clips, subtitles,current.tracks);
           current.subtitles = subtitles;
           source.subtitle_version++;
           await this.save(current);

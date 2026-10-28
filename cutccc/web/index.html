@@ -273,6 +273,9 @@
             </div>
           </div>
           <div class="audio-view-toolbar">
+            <label for="newTrackType">轨道</label>
+            <select id="newTrackType" aria-label="新增轨道类型"><option value="video">视频轨道</option><option value="audio">音频轨道</option><option value="subtitle">字幕轨道</option></select>
+            <button id="addTrackBtn" class="button small" disabled>＋ 添加轨道</button>
             <label for="audioView">音频显示</label>
             <select id="audioView" aria-label="时间轴音频显示">
               <option value="waveform">波形</option><option value="spectrogram">频谱图</option><option value="both">波形＋频谱图</option>

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import {audioRange,audioDuration,projectDuration} from "../web/audio-tracks.js";
+import {hasFreeVideo,videoLayerOrder,videoPlacements} from '../web/tracks.js';
 import os from "node:os";
 import path from "node:path";
 import { capture } from "./processes.js";
@@ -149,7 +150,7 @@ export async function render(
     throw new APIError("CUTCCC_EXPORT_HWACCEL must be empty or cuda");
   const voices = project.voiceovers || [];
   const audibleVoices = voices.filter(v => (v.volume ?? 1) > 0);
-  validateVoiceovers(project.sources, clips, voices);
+  validateVoiceovers(project.sources, clips, voices,project.tracks);
   const seconds=projectDuration(project);
   const profile = exportProfile(sources.get(clips[0]?.source_id || voices[0]?.source_id), options, seconds);
   const { width, height, fps } = profile;
@@ -194,7 +195,19 @@ export async function render(
         `anullsrc=r=48000:cl=stereo,atrim=duration=${duration}[a${i}]`,
       );
   }
-  if(clips.length) {
+  if(clips.length&&hasFreeVideo(project)) {
+    filters.push(`color=c=black:s=${width}x${height}:r=${fps}:d=${seconds}[background]`);
+    let previous='[background]';
+    for(const [layer,p] of videoLayerOrder(project).entries()) {
+      filters.push(`[v${p.index}]setpts=PTS-STARTPTS+${p.start.toFixed(6)}/TB[layer${layer}]`);
+      const label=layer===clips.length-1?'vbase':`composite${layer}`;
+      filters.push(`${previous}[layer${layer}]overlay=x=0:y=0:eof_action=pass:repeatlast=0:shortest=0:enable='gte(t,${p.start.toFixed(6)})*lt(t,${p.end.toFixed(6)})'[${label}]`);
+      previous=`[${label}]`;
+    }
+    filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${seconds}[base-silence]`);
+    for(const p of videoPlacements(project))filters.push(`[a${p.index}]adelay=${Math.round(p.start*1000)}:all=1[clip-audio${p.index}]`);
+    filters.push(`[base-silence]${clips.map((_,i)=>`[clip-audio${i}]`).join('')}amix=inputs=${clips.length+1}:duration=first:normalize=0,alimiter=limit=0.98:level=false:latency=true[abase]`);
+  } else if(clips.length) {
     filters.push(clips.map((_, i) => `[v${i}][a${i}]`).join("") + `concat=n=${clips.length}:v=1:a=1[vcat][acat]`);
     filters.push(`[vcat]tpad=stop_mode=add:color=black:stop_duration=${Math.max(0,seconds-outputDuration(clips)).toFixed(6)},trim=duration=${seconds}[vbase]`);
     filters.push(`[acat]apad,atrim=duration=${seconds}[abase]`);
@@ -223,7 +236,7 @@ export async function render(
     );
     audio = "[amixed]";
   }
-  const cues = mapSubtitles(clips, project.subtitles, voices, project.sources);
+  const cues = mapSubtitles(clips, project.subtitles, voices, project.sources,project.tracks);
   await fs.writeFile(path.join(folder, "subtitles.srt"), toSrt(cues), "utf8");
   await fs.writeFile(path.join(folder, "subtitles.ass"), toAss(wrapExportCues(cues,width,height), width, height), "utf8");
   let video = "[vbase]";

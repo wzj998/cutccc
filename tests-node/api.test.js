@@ -82,6 +82,14 @@ test("separated audio ranges and muted video persist through HTTP with strict va
   const audioOnly=await f.request('/api/projects/'+p.id,'PATCH',{...edit,revision:saved.body.revision,clips:[]});assert.equal(audioOnly.status,200);
   const reloaded=await f.request('/api/projects/'+p.id);assert.equal(reloaded.body.voiceovers[0].source_end,4);
 });
+test('manual tracks and independent video positions survive HTTP save and can return to legacy layout',async t=>{
+  const f=await fixture(t),p=await fakeSource(f),sid=p.sources[0].id;
+  const tracks=[{id:'upper',type:'video',name:'Video 2'},{id:'sound',type:'audio',name:'Audio 2'},{id:'text',type:'subtitle',name:'Text 2'}];
+  const edit={revision:p.revision,tracks,clips:[{source_id:sid,start:0,end:2,timeline_start:1,track_id:'upper'}],subtitles:{[sid]:[{start:0,end:1,text:'Caption',track_id:'text'}]},voiceovers:[]};
+  const saved=await f.request('/api/projects/'+p.id,'PATCH',edit);assert.equal(saved.status,200);assert.deepEqual(saved.body.tracks,tracks);
+  const bad=await f.request('/api/projects/'+p.id,'PATCH',{...edit,revision:saved.body.revision,clips:[{...edit.clips[0],track_id:'sound'}]});assert.equal(bad.status,400);
+  const reset=await f.request('/api/projects/'+p.id,'PATCH',{revision:saved.body.revision,tracks:null,clips:p.clips,subtitles:p.subtitles,voiceovers:[]});assert.equal(reset.status,200);assert.equal(reset.body.tracks,undefined);
+});
 
 test("export API selects 60 fps without changing cut or subtitle clocks", { skip: !hasFFmpeg }, async t => {
   const f = await fixture(t);

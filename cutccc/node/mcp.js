@@ -35,6 +35,7 @@ const definitions = [
       subtitles: { type: "object" },
       title: string,
       voiceovers: { type: "array", items: { type: "object" } },
+      tracks: {anyOf:[{type:'array',items:{type:'object'}},{type:'null'}]},
     },
     ["project_id", "revision", "clips", "subtitles"],
   ],
@@ -112,6 +113,7 @@ export async function callTool(base, name, a = {}) {
       };
       if (a.title !== undefined) b.title = a.title;
       if (a.voiceovers !== undefined) b.voiceovers = a.voiceovers;
+      if (a.tracks !== undefined) b.tracks = a.tracks;
       return apiCall(base, "PATCH", `/api/projects/${id}`, b);
     }
     case "transcribe_source":

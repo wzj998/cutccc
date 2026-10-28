@@ -1,5 +1,6 @@
 import { validateStyle } from "../web/subtitle-style.js";
 import {audioRange,audioDuration,projectDuration,ownsAudioCaptions} from "../web/audio-tracks.js";
+import {videoDuration,videoPlacements,getTracks,DEFAULT_TRACKS} from '../web/tracks.js';
 export const FPS = 30;
 export class APIError extends Error {
   constructor(message, status = 400) {
@@ -18,7 +19,7 @@ export function roundEven(n) {
 export const clipFrames = (c) =>
   Math.max(1, roundEven((c.end - c.start) * FPS));
 export const outputDuration = (clips) =>
-  clips.reduce((n, c) => n + clipFrames(c), 0) / FPS;
+  videoDuration({clips});
 export function identifier(id) {
   if (typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id))
     fail("Invalid identifier");
@@ -33,7 +34,7 @@ export function titleText(title) {
     fail("Project title must contain 1–120 characters");
   return title.trim();
 }
-export function validateEdit(sources, clips, subtitles) {
+export function validateEdit(sources, clips, subtitles, tracks) {
   const durations = new Map(sources.map((s) => [s.id, s.duration]));
   if (!Array.isArray(clips) || clips.length > 64)
     fail("A project supports at most 64 clips");
@@ -43,6 +44,7 @@ export function validateEdit(sources, clips, subtitles) {
       fail("Clip times must be finite numbers");
     if(c.muted!==undefined&&typeof c.muted!=="boolean")fail("Clip muted must be boolean");
     if(c.audio_link!==undefined&&(typeof c.audio_link!=="string"||!c.audio_link||c.audio_link.length>80))fail("Invalid audio link");
+    if(c.timeline_start!==undefined&&(!finite(c.timeline_start)||c.timeline_start<0||c.timeline_start+clipFrames(c)/FPS>86400))fail('Invalid clip timeline position');
     if (
       !(
         0 <= c.start &&
@@ -85,8 +87,19 @@ export function validateEdit(sources, clips, subtitles) {
       try { validateStyle(c.style); } catch (error) { fail(error.message); }
     }
   }
+  validateTracks({sources,clips,subtitles,tracks});
 }
-export function validateVoiceovers(sources, clips, voices) {
+export function validateTracks(project) {
+  if(project.tracks!==undefined) {
+    if(!Array.isArray(project.tracks)||project.tracks.length>64)fail('A project supports at most 64 tracks');
+    const ids=new Set();
+    for(const t of project.tracks){if(!t||typeof t.id!=='string'||!/^[-a-zA-Z0-9_]{1,80}$/.test(t.id)||ids.has(t.id)||!['video','audio','subtitle'].includes(t.type)||typeof t.name!=='string'||!t.name.trim()||[...t.name].length>80||Object.entries(DEFAULT_TRACKS).some(([type,id])=>id===t.id&&type!==t.type))fail('Invalid track definition');ids.add(t.id);}
+  }
+  const definitions=getTracks(project);
+  for(const [type,list] of [['video',project.clips],['audio',project.voiceovers||[]],['subtitle',Object.values(project.subtitles||{}).flat()]])
+    for(const item of list)if(item.track_id!==undefined&&!definitions.some(t=>t.id===item.track_id&&t.type===type))fail('Material track does not exist or has a different type');
+}
+export function validateVoiceovers(sources, clips, voices, tracks) {
   if (!Array.isArray(voices) || voices.length > 32)
     fail("A project supports at most 32 voiceovers");
   for (const v of voices) {
@@ -100,18 +113,20 @@ export function validateVoiceovers(sources, clips, voices) {
       fail("Audio trim must be within the source and retain at least one frame");
     if(v.detached!==undefined&&typeof v.detached!=="boolean")fail("Audio detached must be boolean");
     if(v.link_id!==undefined&&(typeof v.link_id!=="string"||!v.link_id||v.link_id.length>80))fail("Invalid audio link");
-    if (v.start < 0 || v.start+audioDuration(v,source)>86400 || (!v.detached && v.start + audioDuration(v,source) > outputDuration(clips) + 0.05))
+    if (v.start < 0 || v.start+audioDuration(v,source)>86400 || (!v.detached && tracks===undefined && v.start + audioDuration(v,source) > outputDuration(clips) + 0.05))
       fail("Voiceover must fit within the output timeline");
     if (volume < 0 || volume > 2)
       fail("Voiceover volume must be between 0 and 2");
   }
+  validateTracks({sources,clips,subtitles:{},voiceovers:voices,tracks});
 }
 const millis = (n) => roundEven(n * 1000) / 1000;
-export function mapSubtitles(clips, subtitles, voiceovers = [], sources = []) {
-  const project={clips,subtitles,voiceovers,sources};
+export function mapSubtitles(clips, subtitles, voiceovers = [], sources = [], tracks) {
+  const project={clips,subtitles,voiceovers,sources,tracks};
   let offset = 0;
   const cues = [];
-  for (const clip of clips) {
+  for (const placement of videoPlacements(project)) {
+    const clip=placement.clip;offset=placement.start;
     const duration = clipFrames(clip) / FPS;
     for (const c of subtitles[clip.source_id] || []) {
       if(ownsAudioCaptions(project,clip))continue;

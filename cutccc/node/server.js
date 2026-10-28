@@ -52,14 +52,14 @@ function object(value, allowed, required = []) {
 function editBody(b) {
   object(
     b,
-    ["revision", "clips", "subtitles", "title", "voiceovers"],
+    ["revision", "clips", "subtitles", "title", "voiceovers", "tracks"],
     ["revision", "clips", "subtitles"],
   );
   if (!Number.isInteger(b.revision) || b.revision < 1)
     fail("revision must be a positive integer", 422);
   if (!Array.isArray(b.clips)) fail("clips must be an array", 422);
   for (const c of b.clips)
-    object(c, ["source_id", "start", "end", "muted", "audio_link"], ["source_id", "start", "end"]);
+    object(c, ["source_id", "start", "end", "muted", "audio_link", "track_id", "timeline_start"], ["source_id", "start", "end"]);
   if (
     !b.subtitles ||
     typeof b.subtitles !== "object" ||
@@ -69,13 +69,14 @@ function editBody(b) {
   for (const cues of Object.values(b.subtitles)) {
     if (!Array.isArray(cues)) fail("Subtitle cues must be arrays", 422);
     for (const c of cues)
-      object(c, ["start", "end", "text", "style", "shift", "timeline_offset"], ["start", "end", "text"]);
+      object(c, ["start", "end", "text", "style", "shift", "timeline_offset", "track_id"], ["start", "end", "text"]);
   }
   if (b.voiceovers !== undefined && b.voiceovers !== null) {
     if (!Array.isArray(b.voiceovers)) fail("voiceovers must be an array", 422);
     for (const v of b.voiceovers)
-      object(v, ["source_id", "start", "volume", "source_start", "source_end", "detached", "link_id"], ["source_id", "start"]);
+      object(v, ["source_id", "start", "volume", "source_start", "source_end", "detached", "link_id", "track_id"], ["source_id", "start"]);
   }
+  if(b.tracks!==undefined&&b.tracks!==null){if(!Array.isArray(b.tracks))fail('tracks must be an array or null',422);for(const t of b.tracks)object(t,['id','type','name'],['id','type','name']);}
   return b;
 }
 async function sendFile(req, res, file, { name } = {}) {
@@ -269,7 +270,7 @@ export function openapi() {
     ),
     ImportPath: schema({ path: { type: "string", minLength: 1 } }, ["path"]),
     RemoveSource: schema({revision: {type: "integer", minimum: 1}, remove_used: {type:"boolean",default:false,description:"Also remove this source's video clips, audio clips and subtitles; original files remain on disk"}}, ["revision"]),
-    Clip: schema({ source_id: str, start: number, end: number, muted:{type:"boolean"},audio_link:str }, [
+    Clip: schema({ source_id: str, start: number, end: number, muted:{type:"boolean"},audio_link:str,track_id:str,timeline_start:{type:'number',minimum:0,maximum:86400} }, [
       "source_id",
       "start",
       "end",
@@ -285,7 +286,7 @@ export function openapi() {
       marginX: {type: "number", minimum: 0, maximum: 40},
       marginY: {type: "number", minimum: 0, maximum: 40},
     }, []),
-    Subtitle: schema({ start: number, end: number, text: str, style: ref("SubtitleStyle"), shift: {type: "number", minimum: -86400, maximum: 86400, default: 0}, timeline_offset: {type:"number",minimum:-86400,maximum:86400,description:"Independent pasted caption: source time + offset + shift = output time"} }, [
+    Subtitle: schema({ start: number, end: number, text: str, style: ref("SubtitleStyle"),track_id:str, shift: {type: "number", minimum: -86400, maximum: 86400, default: 0}, timeline_offset: {type:"number",minimum:-86400,maximum:86400,description:"Independent pasted caption: source time + offset + shift = output time"} }, [
       "start",
       "end",
       "text",
@@ -296,13 +297,15 @@ export function openapi() {
         start: { type: "number", minimum: 0 },
         volume: { type: "number", minimum: 0, maximum: 2, default: 1 },
         source_start:{type:"number",minimum:0},source_end:{type:"number",minimum:0},
-        detached:{type:"boolean"},link_id:str,
+        detached:{type:"boolean"},link_id:str,track_id:str,
       },
       ["source_id", "start"],
     ),
+    Track: schema({id:str,type:{type:'string',enum:['video','audio','subtitle']},name:{type:'string',minLength:1,maxLength:80}},['id','type','name']),
     Edit: schema(
       {
         revision: { type: "integer", minimum: 1 },
+        tracks:{anyOf:[{type:'array',maxItems:64,items:ref('Track')},{type:'null'}]},
         clips: { type: "array", maxItems: 64, items: ref("Clip") },
         subtitles: {
           type: "object",
@@ -435,6 +438,7 @@ export async function startServer(options = {}) {
             "export-options.js",
             "caption-timing.js",
             "audio-tracks.js",
+            "tracks.js",
             "timeline-clipboard.js",
             "timeline-navigation.js",
             "style.css",

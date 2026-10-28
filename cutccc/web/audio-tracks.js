@@ -1,4 +1,5 @@
-export const videoDuration = project => project.clips.reduce((n,c) => n + Math.max(1,Math.round((c.end-c.start)*30)),0)/30;
+import {videoDuration,videoPlacements} from './tracks.js';
+export {videoDuration} from './tracks.js';
 export function audioRange(voice, source) {
   return {start:voice.source_start ?? 0,end:voice.source_end ?? source?.duration ?? 0};
 }
@@ -7,7 +8,7 @@ export function audioDuration(voice, source) {
 }
 export function projectDuration(project) {
   let end=videoDuration(project);
-  for(const voice of project.voiceovers || []) if(voice.detached) {
+  for(const voice of project.voiceovers || []) if(voice.detached||project.tracks!==undefined) {
     const source=project.sources.find(s=>s.id===voice.source_id);
     end=Math.max(end,Math.ceil((voice.start+audioDuration(voice,source))*30-1e-7)/30);
   }
@@ -23,7 +24,7 @@ export function detachClipAudio(project,index,linkId=globalThis.crypto.randomUUI
   if(ownsAudioCaptions(p,clip))throw new Error('此片段的音频已经分离。');
   p.voiceovers ||= [];
   if(p.voiceovers.length>=32)throw new Error('音频片段数量已达到上限。');
-  const start=videoDuration({...p,clips:p.clips.slice(0,index)});
+  const start=videoPlacements(p)[index].start;
   clip.muted=true;clip.audio_link=linkId;
   p.voiceovers.push({source_id:clip.source_id,start,source_start:clip.start,source_end:clip.end,
     volume:1,detached:true,link_id:linkId});
