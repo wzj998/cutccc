@@ -49,6 +49,7 @@ const state = {
   suppressClipClick: false,
   audioPlayers: new Map(),
   audioClock: null,
+  sourceMenu: null,
   captionSelectionAnchor: null,
   suppressCaptionClick: false,
   previewCues: null,
@@ -365,6 +366,7 @@ async function importFiles(files) {
 }
 
 function render() {
+  closeSourceMenu();
   const p = state.project;
   $("projectTitle").value = p?.title || "";
   $("sourceCount").textContent = p?.sources.length || 0;
@@ -372,7 +374,7 @@ function render() {
     ? p.sources
         .map(
           (s) =>
-            `<div class="source-card ${s.id === state.source ? "selected" : ""}" data-source="${s.id}" role="button" tabindex="0"><div class="source-image"><img src="${mediaUrl(s.id, "poster")}" alt=""><span class="duration-tag">${time(s.duration)}</span></div><div class="source-title"><span>▣</span><strong>${esc(s.name)}</strong></div><div class="source-caption">${s.width} × ${s.height}${s.has_audio ? " · 带音频" : " · 无音轨"}</div></div>`,
+            `<div class="source-card ${s.id === state.source ? "selected" : ""}" data-source="${s.id}" role="button" tabindex="0"><div class="source-image"><img src="${mediaUrl(s.id, "poster")}" alt=""><span class="duration-tag">${time(s.duration)}</span></div><button class="source-menu-button" type="button" data-source-menu="${s.id}" aria-label="${esc(s.name)}：更多操作" aria-haspopup="menu" aria-expanded="false" title="素材操作">⋯</button><div class="source-title"><span>▣</span><strong>${esc(s.name)}</strong></div><div class="source-caption">${s.width} × ${s.height}${s.has_audio ? " · 带音频" : " · 无音轨"}</div></div>`,
         )
         .join("")
     : '<div class="muted empty-library">素材只保存在你的电脑上。<br>导入视频，开始一次剪辑。</div>';
@@ -1797,6 +1799,9 @@ $("undoBtn").onclick = () => undoEdit();
 $("redoBtn").onclick = () => undoEdit(true);
 document.addEventListener("focusout", () => editHistory?.breakGroup());
 $("sourceList").onclick = (e) => {
+  const menuButton=e.target.closest('[data-source-menu]');
+  if(menuButton){const r=menuButton.getBoundingClientRect();openSourceMenu(menuButton.dataset.sourceMenu,r.right,r.bottom,menuButton);return;}
+  if(state.busy||state.saving||state.clipTrim||state.captionGesture)return;
   const card = e.target.closest("[data-source]");
   if (!card) return;
   state.clipboardKind = "clip"; state.subtitleSelection.clear();
@@ -1813,8 +1818,79 @@ $("sourceList").onclick = (e) => {
   }
 };
 $("sourceList").onkeydown = (e) => {
-  if (e.key === "Enter") e.target.click();
+  if(e.target.closest('[data-source-menu]'))return;
+  if(e.key==='ContextMenu'||(e.shiftKey&&e.key==='F10')) {
+    const card=e.target.closest('[data-source]');if(!card)return;
+    e.preventDefault();const r=card.getBoundingClientRect();openSourceMenu(card.dataset.source,r.left+12,r.top+12,card);return;
+  }
+  if (e.key === "Enter"||e.code==='Space'){e.preventDefault();e.target.click();}
 };
+$("sourceList").oncontextmenu=event=>{
+  const card=event.target.closest('[data-source]');if(!card)return;
+  event.preventDefault();openSourceMenu(card.dataset.source,event.clientX,event.clientY,card);
+};
+function closeSourceMenu(restoreFocus=false) {
+  if(!state.sourceMenu&&$("sourceContextMenu").hidden)return;
+  const previous=state.sourceMenu;state.sourceMenu=null;
+  $("sourceContextMenu").hidden=true;
+  for(const button of $("sourceList").querySelectorAll('[data-source-menu]'))button.setAttribute('aria-expanded','false');
+  if(restoreFocus&&previous?.trigger?.isConnected)previous.trigger.focus({preventScroll:true});
+}
+function openSourceMenu(sourceId,x,y,trigger) {
+  const source=state.project?.sources.find(s=>s.id===sourceId);if(!source)return;
+  closeSourceMenu();state.sourceMenu={projectId:state.project.id,sourceId,trigger};
+  const menu=$("sourceContextMenu"),activeJob=state.jobs.some(j=>['queued','running'].includes(j.status));
+  $("sourceMenuName").textContent=source.name;$("sourceMenuName").title=source.name;
+  $("removeSourceBtn").disabled=state.busy||state.saving||!!state.clipTrim||!!state.captionGesture||activeJob;
+  $("sourceMenuHint").textContent=activeJob?'请等待当前工程任务完成后再移除':state.busy||state.saving||state.clipTrim||state.captionGesture?'请先完成当前操作':'原始文件保留';
+  trigger?.closest('[data-source]')?.querySelector('[data-source-menu]')?.setAttribute('aria-expanded','true');
+  menu.hidden=false;menu.style.left=`${Math.max(8,Math.min(x,innerWidth-menu.offsetWidth-8))}px`;
+  menu.style.top=`${Math.max(8,Math.min(y,innerHeight-menu.offsetHeight-8))}px`;
+  if(!$("removeSourceBtn").disabled)$("removeSourceBtn").focus({preventScroll:true});
+}
+async function removeLibrarySource() {
+  const menu=state.sourceMenu;if(!menu||$("removeSourceBtn").disabled)return;
+  if(state.jobs.some(j=>['queued','running'].includes(j.status))){closeSourceMenu(true);toast('请等待当前工程任务完成后再移除素材。',true);return;}
+  const p=state.project,source=p.sources.find(s=>s.id===menu.sourceId);if(!source||p.id!==menu.projectId)return;
+  const clips=p.clips.filter(c=>c.source_id===source.id).length,voices=(p.voiceovers||[]).filter(v=>v.source_id===source.id).length,cues=(p.subtitles[source.id]||[]).length;
+  const usage=clips||voices?`此素材被 ${clips} 段视频、${voices} 段音频使用。\n移除时会一并移除这些片段及 ${cues} 条字幕。\n`:`将从工程移除此素材${cues?`及 ${cues} 条字幕`:''}。\n`;
+  closeSourceMenu(true);
+  if(!confirm(`从工程移除“${source.name}”？\n\n${usage}磁盘原文件保留。此操作会重置当前撤销记录。`))return;
+  try {
+    if(!(await saveProject())||state.project?.id!==menu.projectId)return;
+    if(state.dirty){toast('仍有新的编辑，请保存后再移除素材。',true);return;}
+    pause();busy('正在从工程移除素材…');
+    const sent=JSON.stringify(editSnapshot()),position=Number($("fullscreenSeek").value);
+    const result=await api(`/api/projects/${menu.projectId}/sources/${source.id}`,'DELETE',{revision:state.project.revision,remove_used:!!(clips||voices)});
+    if(state.project?.id!==menu.projectId)return;
+    const incoming=editSnapshot(),changed=JSON.stringify(incoming)!==sent;
+    state.project=result;state.previewContext=null;state.audioClock=null;state.selectedVoice=-1;state.clipboardKind='clip';state.subtitleSelection.clear();
+    state.clip=result.clips.length?0:-1;state.source=result.clips[0]?.source_id||result.sources[0]?.id||null;
+    markSaved();
+    if(changed){state.project.title=incoming.title;state.project.clips=incoming.clips.filter(c=>c.source_id!==source.id);state.project.voiceovers=incoming.voiceovers.filter(v=>v.source_id!==source.id);state.project.subtitles=Object.fromEntries(result.sources.map(s=>[s.id,incoming.subtitles[s.id]||[]]));markDirty();}
+    state.clip=state.project.clips.length?0:-1;state.source=state.project.clips[0]?.source_id||state.project.sources[0]?.id||null;
+    render();if(total())seekOutput(Math.min(position,total()),false);else setPreview(0);
+    await projectOptions();toast('素材已从工程移除，原始文件保留。');
+  }catch(error){toast(error.message,true);}
+  finally{busy();}
+}
+$("removeSourceBtn").onclick=removeLibrarySource;
+$("sourceContextMenu").onkeydown=event=>{
+  event.stopPropagation();
+  if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeSourceMenu(true);}
+  else if(['ArrowDown','ArrowUp','Home','End','Tab'].includes(event.key)){event.preventDefault();if(event.key==='Tab')closeSourceMenu(true);else $("removeSourceBtn").focus();}
+};
+document.addEventListener('keydown',event=>{
+  if(!state.sourceMenu)return;
+  event.stopImmediatePropagation();
+  if(['Escape','Tab'].includes(event.key)){event.preventDefault();closeSourceMenu(true);}
+  else if(['Enter',' '].includes(event.key)){event.preventDefault();$("removeSourceBtn").click();}
+  else if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End','Delete'].includes(event.key))event.preventDefault();
+});
+document.addEventListener('pointerdown',event=>{if(state.sourceMenu&&!event.target.closest('#sourceContextMenu,[data-source-menu]'))closeSourceMenu();},true);
+document.addEventListener('scroll',()=>closeSourceMenu(),true);
+window.addEventListener('blur',()=>closeSourceMenu());
+window.addEventListener('resize',()=>closeSourceMenu());
 $("clipTrack").onclick = (e) => {
   if (state.suppressClipClick || e.target.closest("[data-resize-clip]")) return;
   if (e.target.closest(".spectrogram-status.retry")) {

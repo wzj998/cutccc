@@ -268,7 +268,7 @@ export function openapi() {
       [],
     ),
     ImportPath: schema({ path: { type: "string", minLength: 1 } }, ["path"]),
-    RemoveSource: schema({revision: {type: "integer", minimum: 1}}, ["revision"]),
+    RemoveSource: schema({revision: {type: "integer", minimum: 1}, remove_used: {type:"boolean",default:false,description:"Also remove this source's video clips, audio clips and subtitles; original files remain on disk"}}, ["revision"]),
     Clip: schema({ source_id: str, start: number, end: number, muted:{type:"boolean"},audio_link:str }, [
       "source_id",
       "start",
@@ -510,9 +510,10 @@ export async function startServer(options = {}) {
         }
         const removeSource = /^sources\/([^/]+)$/.exec(rest || "");
         if (removeSource && method === "DELETE") {
-          const b = object(await body(req), ["revision"], ["revision"]);
+          const b = object(await body(req), ["revision", "remove_used"], ["revision"]);
           if (!Number.isInteger(b.revision) || b.revision < 1) fail("revision must be a positive integer", 422);
-          json(res, 200, await studio.removeSource(id, removeSource[1], b.revision));
+          if (b.remove_used !== undefined && typeof b.remove_used !== "boolean") fail("remove_used must be boolean", 422);
+          json(res, 200, await studio.removeSource(id, removeSource[1], b.revision, b.remove_used));
           return;
         }
         const waveform = /^sources\/([^/]+)\/waveform$/.exec(rest || "");

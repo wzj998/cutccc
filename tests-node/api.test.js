@@ -656,6 +656,31 @@ test("unused source removal respects revisions, usage and recoverable media", as
   assert.deepEqual(removed.body.sources, []);
   assert.deepEqual(removed.body.subtitles, {});
   assert.ok((await fs.stat(file)).isFile());
+  const backups=await fs.readdir(f.studio.projectDir(p.id,"backups"));assert.equal(backups.length,1);
+  const previous=JSON.parse(await fs.readFile(f.studio.projectDir(p.id,"backups",backups[0]),"utf8"));assert.equal(previous.sources[0].id,sid);
+});
+test("confirmed source removal atomically removes video, audio and captions and preserves unrelated material",async t=>{
+  const f=await fixture(t);let p=await fakeSource(f);const sid=p.sources[0].id,other='b'.repeat(32);
+  p.sources.push({...p.sources[0],id:other,name:'Keep this',file:other+'.mp4'});p.subtitles[other]=[{start:0,end:1,text:'Keep'}];
+  await fs.writeFile(f.studio.projectDir(p.id,'media',other+'.mp4'),'other-media');
+  p.clips.push({source_id:other,start:0,end:3});p.voiceovers=[{source_id:sid,start:0,source_start:1,source_end:2,detached:true,volume:1}];
+  p.subtitles[sid]=[{start:0,end:1,text:'Remove'}];await f.studio.save(p);
+  const url=`/api/projects/${p.id}/sources/${sid}`;
+  assert.equal((await f.request(url,'DELETE',{revision:p.revision,remove_used:'yes'})).status,422);
+  assert.equal((await f.request(url,'DELETE',{revision:p.revision-1,remove_used:true})).status,409);
+  const removed=await f.request(url,'DELETE',{revision:p.revision,remove_used:true});assert.equal(removed.status,200);
+  assert.deepEqual(removed.body.clips,[{source_id:other,start:0,end:3}]);assert.deepEqual(removed.body.voiceovers,[]);
+  assert.deepEqual(Object.keys(removed.body.subtitles),[other]);assert.equal(removed.body.subtitles[other][0].text,'Keep');
+  assert.ok((await fs.stat(f.studio.projectDir(p.id,'media',sid+'.mp4'))).isFile());
+  const backupFiles=await fs.readdir(f.studio.projectDir(p.id,'backups'));
+  const backup=JSON.parse(await fs.readFile(f.studio.projectDir(p.id,'backups',backupFiles[0]),'utf8'));
+  assert.equal(backup.clips.length,2);assert.equal(backup.voiceovers.length,1);assert.equal(backup.subtitles[sid][0].text,'Remove');
+});
+test("active jobs block confirmed source removal without partially changing the project",async t=>{
+  const f=await fixture(t),p=await fakeSource(f),jid='c'.repeat(32);
+  await fs.mkdir(f.studio.jobDir(jid));await f.studio.write(f.studio.jobDir(jid,'job.json'),{id:jid,project_id:p.id,status:'running',kind:'export'});
+  const result=await f.request(`/api/projects/${p.id}/sources/${p.sources[0].id}`,'DELETE',{revision:p.revision,remove_used:true});assert.equal(result.status,409);
+  const unchanged=await f.studio.getProject(p.id);assert.deepEqual(unchanged,p);
 });
 
 test("shutdown terminates owned child processes and releases the project directory", async (t) => {

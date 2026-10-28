@@ -343,18 +343,28 @@ export class Studio {
       return this.save(p);
     });
   }
-  async removeSource(id, sid, revision) {
+  async removeSource(id, sid, revision, removeUsed = false) {
     identifier(sid);
+    if(typeof removeUsed!=="boolean")throw new APIError("remove_used must be boolean",422);
     return this.exclusive(async () => {
       const p = await this.getProject(id);
       if (p.revision !== revision) throw new APIError("Project changed in another client. Reload before saving.", 409);
       if (!p.sources.some(s => s.id === sid)) throw new APIError("Source not found", 404);
-      if (p.clips.some(c => c.source_id === sid) || (p.voiceovers || []).some(v => v.source_id === sid))
+      if (!removeUsed && (p.clips.some(c => c.source_id === sid) || (p.voiceovers || []).some(v => v.source_id === sid)))
         throw new APIError("Remove the source from the timeline before removing it from the library");
       if ((await this.listJobs(id)).some(j => ["queued", "running"].includes(j.status)))
         throw new APIError("Wait for the project's active tasks before removing a source", 409);
+      const before = structuredClone(p);
+      p.clips = p.clips.filter(c => c.source_id !== sid);
+      p.voiceovers = (p.voiceovers || []).filter(v => v.source_id !== sid);
       p.sources = p.sources.filter(s => s.id !== sid);
       delete p.subtitles[sid];
+      validateEdit(p.sources, p.clips, p.subtitles);
+      try { validateVoiceovers(p.sources, p.clips, p.voiceovers); }
+      catch { throw new APIError("移除后，其他音频将超出剩余视频时长，请先调整这些音频。"); }
+      const backups = this.projectDir(id, "backups");
+      await fs.mkdir(backups, {recursive:true});
+      await this.write(path.join(backups, `before-source-removal-${p.revision}-${uuid()}.json`), before);
       // Keep the files on disk so existing project backups remain recoverable.
       return this.save(p);
     });
