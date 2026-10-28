@@ -71,6 +71,17 @@ async function waitJob(f, id) {
   }
   throw new Error("Job did not finish");
 }
+test("separated audio ranges and muted video persist through HTTP with strict validation",async t=>{
+  const f=await fixture(t),p=await fakeSource(f),sid=p.sources[0].id;
+  const edit={revision:p.revision,clips:[{source_id:sid,start:0,end:2,muted:true,audio_link:'pair'}],
+    subtitles:p.subtitles,voiceovers:[{source_id:sid,start:0,source_start:3,source_end:4,volume:1,detached:true,link_id:'pair'}]};
+  const saved=await f.request('/api/projects/'+p.id,'PATCH',edit);assert.equal(saved.status,200);
+  assert.equal(saved.body.clips[0].muted,true);assert.equal(saved.body.voiceovers[0].source_start,3);
+  const invalid=await f.request('/api/projects/'+p.id,'PATCH',{...edit,revision:saved.body.revision,voiceovers:[{...edit.voiceovers[0],source_end:20}]});
+  assert.equal(invalid.status,400);
+  const audioOnly=await f.request('/api/projects/'+p.id,'PATCH',{...edit,revision:saved.body.revision,clips:[]});assert.equal(audioOnly.status,200);
+  const reloaded=await f.request('/api/projects/'+p.id);assert.equal(reloaded.body.voiceovers[0].source_end,4);
+});
 
 test("export API selects 60 fps without changing cut or subtitle clocks", { skip: !hasFFmpeg }, async t => {
   const f = await fixture(t);

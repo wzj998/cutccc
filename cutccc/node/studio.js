@@ -25,6 +25,7 @@ import { generateWaveform, WAVEFORM_VERSION } from "./waveform.js";
 import { generateSpectrogram, spectrumRegion, SPECTROGRAM_VERSION } from "./spectrogram.js";
 import { exportOptions, exportProfile } from "../web/export-options.js";
 import { openFolder } from "./open-folder.js";
+import {projectDuration} from "../web/audio-tracks.js";
 
 const uuid = () => randomUUID().replaceAll("-", "");
 const now = () => Date.now() / 1000;
@@ -221,7 +222,7 @@ export class Studio {
           updated_at: p.updated_at,
           revision: p.revision,
           source_count: p.sources.length,
-          duration: outputDuration(p.clips),
+          duration: projectDuration(p),
         });
       }
     return projects.sort((a, b) => b.updated_at - a.updated_at);
@@ -473,8 +474,8 @@ export class Studio {
         catch (e) { throw new APIError(e.message, 422); }
         validateEdit(p.sources, p.clips, p.subtitles);
         validateVoiceovers(p.sources, p.clips, p.voiceovers || []);
-        if (!p.clips.length) throw new APIError("Add a clip before exporting");
-        try { exportProfile(p.sources.find(s=>s.id===p.clips[0].source_id),options,outputDuration(p.clips)); }
+        if (!p.clips.length && !(p.voiceovers||[]).some(v=>v.detached)) throw new APIError("Add a clip before exporting");
+        try { exportProfile(p.sources.find(s=>s.id===(p.clips[0]?.source_id||p.voiceovers[0]?.source_id)),options,projectDuration(p)); }
         catch (e) { throw new APIError(e.message,422); }
       } else throw new APIError("Unknown job type");
       const jid = uuid();

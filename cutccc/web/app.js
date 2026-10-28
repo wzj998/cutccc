@@ -4,6 +4,8 @@ let subtitleStyle;
 let captionTiming;
 let timelineClipboard;
 let timelineNavigation;
+let audioTracks;
+const audioTracksReady = import("/static/audio-tracks.js").then(module => {audioTracks=module;});
 const timelineNavigationReady = import("/static/timeline-navigation.js").then(module => { timelineNavigation = module; });
 const timelineClipboardReady = import("/static/timeline-clipboard.js").then(module => { timelineClipboard = module; });
 const captionTimingReady = import("/static/caption-timing.js").then(module => { captionTiming = module; });
@@ -45,6 +47,8 @@ const state = {
   captionGesture: null,
   clipTrim: null,
   suppressClipClick: false,
+  audioPlayers: new Map(),
+  audioClock: null,
   captionSelectionAnchor: null,
   suppressCaptionClick: false,
   previewCues: null,
@@ -62,7 +66,8 @@ const esc = (value) =>
 const duration = (clip) =>
   Math.max(1, Math.round((clip.end - clip.start) * 30)) / 30;
 const total = () =>
-  state.project ? state.project.clips.reduce((s, c) => s + duration(c), 0) : 0;
+  state.project ? audioTracks ? audioTracks.projectDuration(state.project) : state.project.clips.reduce((s,c)=>s+duration(c),0) : 0;
+const selectedAudio = () => state.clipboardKind === "voice" ? state.project?.voiceovers?.[state.selectedVoice] : null;
 const selected = () => state.project?.clips[state.clip];
 const source = () => state.project?.sources.find((s) => s.id === state.source);
 // Timeline selection can differ from the clip currently shown in the player.
@@ -180,7 +185,7 @@ function updateButtons() {
   $("saveBtn").disabled = !has || !state.dirty || state.busy || state.saving || !!state.clipTrim;
   $("undoBtn").disabled = !has || !editHistory?.canUndo || state.busy || state.saving;
   $("redoBtn").disabled = !has || !editHistory?.canRedo || state.busy || state.saving;
-  $("exportBtn").disabled = !has || !state.project.clips.length || state.busy || state.saving || !!state.clipTrim;
+  $("exportBtn").disabled = !has || !total() || state.busy || state.saving || !!state.clipTrim;
   $("reloadBtn").disabled = !has || state.busy || state.saving || !!state.clipTrim;
   $("projectSelect").disabled = state.busy || state.saving || !!state.clipTrim;
   $("projectTitle").disabled = !has;
@@ -192,7 +197,7 @@ function updateButtons() {
   for (const id of ["previewZoom", "fullscreenZoom", "previewFitBtn", "fullscreenFitBtn"])
     $(id).disabled = !preview;
   updatePreviewZoomButtons();
-  $("fullscreenSeek").disabled = !state.project?.clips.length;
+  $("fullscreenSeek").disabled = !total();
   $("fullscreenSeek").max = total();
   for (const id of [
     "splitBtn",
@@ -205,9 +210,16 @@ function updateButtons() {
     $(id).disabled = !clip || state.busy || !!state.clipTrim;
   for (const id of ["splitBtn", "setInBtn", "setOutBtn"])
     $(id).disabled ||= selected() !== previewClip();
-  $("moveLeftBtn").disabled = !clip || state.clip === 0;
+  if(selectedAudio()) for(const id of ["removeClipBtn","splitBtn","trimStart","trimEnd"])
+    $(id).disabled=state.busy||!!state.clipTrim;
+  if(selectedAudio()) {
+    const v=selectedAudio(),s=state.project.sources.find(s=>s.id===v.source_id),position=Number($("fullscreenSeek").value);
+    for(const id of ['setInBtn','setOutBtn'])$(id).disabled=!!state.clipTrim||position<v.start||position>=v.start+audioTracks.audioDuration(v,s);
+  }
+  $("detachAudioBtn").disabled=!selected()||!!selectedAudio()||!src?.has_audio||!!state.clipTrim||state.busy||!audioTracks||audioTracks.ownsAudioCaptions(state.project,selected());
+  $("moveLeftBtn").disabled = !!selectedAudio() || !clip || state.clip === 0;
   $("moveRightBtn").disabled =
-    !clip || state.clip === state.project.clips.length - 1;
+    !!selectedAudio() || !clip || state.clip === state.project.clips.length - 1;
   $("appendBtn").disabled = !src || state.busy;
   $("addVoiceoverBtn").disabled = !src?.has_audio || !total() || state.busy;
   $("addCaptionBtn").disabled = !src || state.busy;
@@ -367,6 +379,7 @@ function render() {
   const preview = previewSource();
   $("welcome").hidden = Boolean(preview);
   $("videoFrame").hidden = !preview;
+  $("videoFrame").classList.toggle("audio-only",!!state.audioClock);
   $("previewMeta").textContent = preview
     ? `${preview.width} × ${preview.height} · ${time(preview.duration)}`
     : "你的故事，从这里开始";
@@ -501,6 +514,14 @@ async function toggleFullscreen() {
   }
 }
 function renderInspector() {
+  const audio=selectedAudio();
+  if(audio) {
+    const s=state.project.sources.find(s=>s.id===audio.source_id),r=audioTracks.audioRange(audio,s);
+    $("selectedName").textContent=`音频 · ${s.name}`;
+    $("selectedMeta").textContent=`时间轴 ${time(audio.start)} · 时长 ${time(r.end-r.start)}`;
+    $("trimStart").value=r.start.toFixed(3);$("trimEnd").value=r.end.toFixed(3);
+    $("trimStart").max=$("trimEnd").max=s.duration;return;
+  }
   const c = selected(),
     s = source();
   $("selectedName").textContent = c ? s?.name || "片段" : "选择一个片段";
@@ -513,12 +534,20 @@ function renderInspector() {
 }
 function renderVoiceovers() {
   const p = state.project;
+  for(const audio of $("voiceoverList").querySelectorAll('audio'))audio.pause();
   $("voiceoverList").innerHTML = (p?.voiceovers || [])
     .map((v, i) => {
       const s = p.sources.find((s) => s.id === v.source_id);
-      return `<div class="subtitle-row" data-voice="${i}"><strong>${esc(s?.name || "旁白")}</strong>${v.volume === 0 ? '<p class="muted">语音已关闭，保留字幕显示位置。</p>' : ''}<div class="trim-fields"><label>成片入点 / 秒<input type="number" min="0" step="0.001" data-voice-field="start" value="${v.start}"></label><label>音量 / 倍<input type="number" min="0" max="2" step="0.1" data-voice-field="volume" value="${v.volume ?? 1}"></label></div><audio controls preload="none" src="${mediaUrl(v.source_id)}" style="width:100%"></audio><div class="voice-actions">${v.volume === 0 ? `<button class="button small" data-restore-voice="${i}">恢复语音</button>` : `<button class="button small" data-remove-voice="${i}">仅移除语音</button>`}<button class="button small" data-remove-voice-all="${i}">移除语音及字幕</button></div></div>`;
+      const r=audioTracks.audioRange(v,s);
+      return `<div class="subtitle-row ${selectedAudio()===v?'selected':''}" data-voice="${i}"><strong>${esc(s?.name || "音频")}</strong><p class="muted">原素材 ${time(r.start)} – ${time(r.end)}</p>${v.volume === 0 ? '<p class="muted">语音已关闭，保留字幕显示位置。</p>' : ''}<div class="trim-fields"><label>时间轴开始 / 秒<input type="number" min="0" step="0.001" data-voice-field="start" value="${v.start}"></label><label>音量 / 倍<input type="number" min="0" max="2" step="0.1" data-voice-field="volume" value="${v.volume ?? 1}"></label></div><audio controls preload="none" data-preview-voice="${i}" src="${mediaUrl(v.source_id)}" style="width:100%"></audio><div class="voice-actions">${v.volume === 0 ? `<button class="button small" data-restore-voice="${i}">恢复语音</button>` : `<button class="button small" data-remove-voice="${i}">仅移除语音</button>`}<button class="button small" data-remove-voice-all="${i}">移除语音及字幕</button></div></div>`;
     })
     .join("");
+  for(const audio of $("voiceoverList").querySelectorAll('audio')) {
+    const voice=p.voiceovers[Number(audio.dataset.previewVoice)],source=p.sources.find(s=>s.id===voice.source_id),range=audioTracks.audioRange(voice,source);
+    audio.onplay=()=>{pause();if(audio.currentTime<range.start||audio.currentTime>=range.end)audio.currentTime=range.start;};
+    audio.ontimeupdate=()=>{if(audio.currentTime>=range.end)audio.pause();};
+    audio.onseeked=()=>{if(audio.currentTime<range.start)audio.currentTime=range.start;if(audio.currentTime>=range.end)audio.pause();};
+  }
 }
 function mappedCues() {
   let offset = 0,
@@ -526,6 +555,7 @@ function mappedCues() {
   for (const [clipIndex, c] of (state.project?.clips || []).entries()) {
     const d = duration(c);
     for (const [index, cue] of (state.project.subtitles[c.source_id] || []).entries()) {
+      if(audioTracks?.ownsAudioCaptions(state.project,c))continue;
       if (cue.timeline_offset !== undefined) continue;
       const a = Math.max(c.start, cue.start),
         b = Math.min(c.end, cue.end, c.start + d);
@@ -542,10 +572,11 @@ function mappedCues() {
   }
   for (const [voiceIndex, voice] of (state.project?.voiceovers || []).entries()) {
     const s = state.project.sources.find(s => s.id === voice.source_id);
+    const range=audioTracks.audioRange(voice,s);
     for (const [index, cue] of (state.project.subtitles[voice.source_id] || []).entries()) {
       if (cue.timeline_offset !== undefined) continue;
-      const start = Math.max(0, cue.start), end = Math.min(cue.end, s.duration, offset - voice.start);
-      if (end > start) result.push({start: voice.start + start, end: voice.start + end, text: cue.text, style: cue.style,
+      const start = Math.max(range.start, cue.start), end = Math.min(cue.end, range.end, total() - voice.start+range.start);
+      if (end > start) result.push({start: voice.start + start-range.start, end: voice.start + end-range.start, text: cue.text, style: cue.style,
         sourceId: voice.source_id, index, occurrence: `voice:${voiceIndex}:${index}`});
     }
   }
@@ -556,7 +587,7 @@ function mappedCues() {
   }
   return result.map(cue => {
     const shift = state.project.subtitles[cue.sourceId][cue.index].shift || 0;
-    return {...cue, start: Math.max(0, cue.start + shift), end: Math.min(offset, cue.end + shift)};
+    return {...cue, start: Math.max(0, cue.start + shift), end: Math.min(total(), cue.end + shift)};
   }).filter(cue => cue.end > cue.start).sort((a, b) => a.start - b.start);
 }
 function renderTimeline() {
@@ -574,7 +605,7 @@ function renderTimeline() {
   const playheadTime = Number($("fullscreenSeek").value) || 0;
   const playheadX = playheadTime * previousZoom - scroll.scrollLeft;
   const seconds = total();
-  $("clipCount").textContent = `${p?.clips.length || 0} 段`;
+  $("clipCount").textContent = `${p?.clips.length || 0} 段视频${p?.voiceovers?.length?' · '+p.voiceovers.length+' 段音频':''}`;
   $("totalClock").textContent = time(seconds);
   const viewportWidth = Math.max(1, scroll.clientWidth - 1);
   const fitScale = seconds > 0 ? viewportWidth / seconds : 24;
@@ -609,6 +640,15 @@ function renderTimeline() {
         })
         .join("")
     : '<div class="timeline-placeholder">导入视频后，片段将出现在这里</div>';
+  const audioLanes=[];
+  $("audioTrack").hidden=!p?.voiceovers?.length;
+  $("audioTrack").innerHTML=(p?.voiceovers||[]).map((v,i)=>{
+    const source=p.sources.find(s=>s.id===v.source_id),length=audioTracks.audioDuration(v,source);
+    let lane=audioLanes.findIndex(end=>end<=v.start);if(lane<0)lane=audioLanes.length;audioLanes[lane]=v.start+length;
+    return `<div class="timeline-clip timeline-audio ${selectedAudio()===v?'selected':''}" data-audio-index="${i}" role="button" tabindex="0" aria-label="音频 ${i+1}：${esc(source.name)}" style="left:${v.start*state.zoom}px;top:${lane*38+3}px;width:${length*state.zoom}px"><span>♫ ${esc(source.name)}</span><canvas class="audio-waveform" aria-hidden="true"></canvas><span class="clip-resize-handle start" data-resize-clip="start" title="拖动调整音频入点" aria-hidden="true"></span><span class="clip-resize-handle end" data-resize-clip="end" title="拖动调整音频出点" aria-hidden="true"></span></div>`;
+  }).join('');
+  timelinePanel.style.setProperty('--audio-track-height',`${audioLanes.length?audioLanes.length*38+7:0}px`);
+  $("audioTrack").style.height=`${audioLanes.length*38+7}px`;
   const lanes = [];
   const timelineCues = mappedCues();
   state.previewCues = timelineCues;
@@ -627,7 +667,7 @@ function renderTimeline() {
     panel.style.setProperty("--caption-extra-height", extraHeight);
     requestAnimationFrame(fitPreview);
   }
-  $("playhead").hidden = !p?.clips.length;
+  $("playhead").hidden = !seconds;
   const anchor = playheadX >= 0 && playheadX <= viewportWidth ? playheadX : viewportWidth / 2;
   scroll.scrollLeft = zoom === 0 ? 0 : Math.abs(previousZoom - state.zoom) > .000001
     ? playheadTime * state.zoom - anchor : previousTime * state.zoom;
@@ -637,7 +677,7 @@ function renderTimeline() {
 function ensureWaveforms() {
   const project = state.project;
   if (!project || state.audioView === "spectrogram") return;
-  for (const id of new Set(project.clips.map(clip => clip.source_id))) {
+  for (const id of new Set([...project.clips,...(project.voiceovers||[])].map(clip => clip.source_id))) {
     if (!project.sources.find(source => source.id === id)?.has_audio) continue;
     const key = `${project.id}:${id}`;
     if (state.waveforms.has(key)) continue;
@@ -655,7 +695,27 @@ function scheduleWaveformDraw() {
   state.waveformDrawQueued = true;
   requestAnimationFrame(() => { state.waveformDrawQueued = false; drawClipWaveforms(); });
 }
+function drawAudioWaveforms() {
+  if(!state.project||!audioTracks)return;
+  const viewport=$("timelineScroll").getBoundingClientRect();
+  for(const block of $("audioTrack").querySelectorAll('[data-audio-index]')) {
+    const voice=state.project.voiceovers[Number(block.dataset.audioIndex)],source=state.project.sources.find(s=>s.id===voice.source_id);
+    const data=state.waveforms.get(`${state.project.id}:${source.id}`)?.data,canvas=block.querySelector('canvas');
+    const rect=block.getBoundingClientRect(),left=Math.max(0,viewport.left-rect.left),right=Math.min(rect.width,viewport.right-rect.left);
+    canvas.hidden=right<=left;if(canvas.hidden)continue;
+    const width=Math.ceil(right-left),height=20;canvas.width=width;canvas.height=height;canvas.style.left=`${left}px`;canvas.style.width=`${width}px`;
+    const ctx=canvas.getContext('2d');ctx.clearRect(0,0,width,height);ctx.fillStyle='#8bdab9';
+    if(!data)continue;
+    const range=audioTracks.audioRange(voice,source),rate=data.peaks_per_second,gain=1/Math.max(.02,data.peak_max);
+    for(let x=0;x<width;x+=2) {
+      const a=Math.floor((range.start+(left+x)/state.zoom)*rate),b=Math.min(data.peaks.length,Math.ceil((range.start+(left+x+2)/state.zoom)*rate));
+      let peak=0;for(let i=Math.max(0,a);i<b;i++)peak=Math.max(peak,data.peaks[i]);
+      const h=Math.sqrt(Math.min(1,peak*gain))*9;ctx.fillRect(x,10-h,1.5,h*2);
+    }
+  }
+}
 function drawClipWaveforms() {
+  drawAudioWaveforms();
   if (!state.project) return;
   if (state.audioView === "spectrogram") { drawClipSpectrograms(); return; }
   const scroll = $("timelineScroll"), bounds = scroll.getBoundingClientRect();
@@ -1042,7 +1102,10 @@ function previewSubtitle(sourceId, index) {
   const voice = (state.project.voiceovers || []).find(v => v.source_id === sourceId);
   const at = cue.start + Math.min(.05, (cue.end - cue.start) / 2);
   pause();
-  if (voice) { seekOutput(voice.start + at, false); return; }
+  if (voice) {
+    const range=audioTracks.audioRange(voice,state.project.sources.find(s=>s.id===sourceId));
+    if(cue.start<range.end&&cue.end>range.start){seekOutput(voice.start + Math.max(0,at-range.start), false); return;}
+  }
   const clipIndex = state.project.clips.findIndex(c => c.source_id === sourceId && c.start < cue.end && c.end > cue.start);
   if (clipIndex >= 0) selectClip(clipIndex, Math.max(at, state.project.clips[clipIndex].start));
   else { state.source = sourceId; state.clip = -1; render(); setPreview(at); }
@@ -1188,17 +1251,48 @@ $("jobList").addEventListener("click", async event => {
 });
 
 function setPlaying(playing) {
+  if(playing)for(const audio of $("voiceoverList").querySelectorAll('audio'))audio.pause();
+  if(state.audioClock&&playing&&!state.playing)state.audioClock.at=performance.now();
   state.playing = playing;
   for (const id of ["playBtn", "fullscreenPlayBtn"]) {
     $(id).textContent = playing ? "Ⅱ" : "▶";
     $(id).setAttribute("aria-label", playing ? "暂停" : "播放");
   }
+  syncTimelineAudio(Number($("fullscreenSeek").value));
 }
 function pause() {
+  if(state.audioClock&&state.playing)state.audioClock.position=Math.min(total(),state.audioClock.position+(performance.now()-state.audioClock.at)/1000);
   setPlaying(false);
   $("video").pause();
 }
+function syncTimelineAudio(position,force=false) {
+  if(!audioTracks||!state.project)return;
+  const duck=(state.project.voiceovers||[]).some(v=>!v.detached&&(v.volume??1)>0&&position>=v.start&&position<v.start+audioTracks.audioDuration(v,state.project.sources.find(s=>s.id===v.source_id)));
+  $("video").volume=(state.audioClock||previewClip()?.muted)?0:(duck?0.3:1);
+  const active=new Set();
+  for(const [index,voice] of (state.project.voiceovers||[]).entries()) {
+    const key=`${state.project.id}:${index}`,source=state.project.sources.find(s=>s.id===voice.source_id),range=audioTracks.audioRange(voice,source);
+    active.add(key);let player=state.audioPlayers.get(key);
+    if(!player||player.sourceId!==voice.source_id) {
+      player?.element.pause();const element=new Audio(mediaUrl(voice.source_id));element.preload='metadata';
+      player={element,sourceId:voice.source_id,pending:false};state.audioPlayers.set(key,player);
+    }
+    const audio=player.element,inside=position>=voice.start&&position<voice.start+range.end-range.start;
+    audio.volume=Math.max(0,Math.min(1,voice.volume??1));
+    if(!inside||!state.playing||(voice.volume??1)===0)audio.pause();
+    if(inside&&audio.readyState>=1) {
+      const desired=range.start+position-voice.start;
+      if(force||Math.abs(audio.currentTime-desired)>.18)audio.currentTime=Math.max(range.start,Math.min(range.end,desired));
+    }
+    if(inside&&state.playing&&(voice.volume??1)>0&&audio.paused&&!player.pending) {
+      player.pending=true;audio.play().catch(()=>{}).finally(()=>{player.pending=false;});
+    }
+  }
+  for(const [key,player] of state.audioPlayers)if(!active.has(key)){player.element.pause();state.audioPlayers.delete(key);}
+}
 function setPreview(at = 0, autoplay = false) {
+  if(!state.project?.clips.length&&total()>0){seekOutput(0,autoplay);return;}
+  state.audioClock=null;$("videoFrame").classList.remove('audio-only');
   const wasDetached = !!state.previewContext;
   state.previewContext = null;
   if (wasDetached) render();
@@ -1266,8 +1360,14 @@ function selectClip(index, at, autoplay = false) {
   setPreview(at ?? selected().start, autoplay);
 }
 function seekOutput(seconds, autoplay = state.playing) {
-  if (!Number.isFinite(seconds) || !state.project?.clips.length) return;
+  if (!Number.isFinite(seconds) || !state.project || !total()) return;
   const position = Math.max(0, Math.min(seconds, total()));
+  const videoEnd=audioTracks.videoDuration(state.project);
+  if(!state.project.clips.length||(position>=videoEnd&&total()>videoEnd+1e-8)) {
+    pause();state.audioClock={position,at:performance.now()};state.outputEndSelected=position===total();
+    state.pendingOutputSeek=null;$("fullscreenSeek").value=position;$("videoFrame").classList.add('audio-only');
+    setPlaying(autoplay);syncTimelineAudio(position,true);followPlayhead(position,true);return;
+  }
   let offset = 0;
   for (const [index, clip] of state.project.clips.entries()) {
     const length = duration(clip);
@@ -1289,6 +1389,7 @@ function seekOutput(seconds, autoplay = state.playing) {
       }
       state.pendingOutputSeek = position;
       state.outputEndSelected = position === total();
+      syncTimelineAudio(position,true);
       followPlayhead(position,true);
       return;
     }
@@ -1316,7 +1417,7 @@ function startTimelineScrub(event) {
   if (
     event.button !== 0 ||
     !event.isPrimary ||
-    !state.project?.clips.length ||
+    !total() ||
     state.timelineScrub || state.clipTrim
   )
     return;
@@ -1346,6 +1447,10 @@ function finishTimelineScrub(event) {
   seekOutput(drag.position, false);
 }
 function togglePlay() {
+  if(state.audioClock) {
+    if(state.playing)pause();else if(state.outputEndSelected)seekOutput(0,true);else setPlaying(true);
+    return;
+  }
   if (!previewClip()) {
     if (state.project?.clips.length) selectClip(0);
     else return;
@@ -1379,6 +1484,7 @@ function nextClip() {
   if (index + 1 < state.project.clips.length)
     selectClip(index + 1, undefined, true);
   else {
+    if(total()>audioTracks.videoDuration(state.project)+1e-8){seekOutput(audioTracks.videoDuration(state.project),true);return;}
     pause();
     state.outputEndSelected = true;
     followPlayhead(total(),true);
@@ -1391,7 +1497,7 @@ function followPlayhead(position, force = false) {
   if (Math.abs(left-scroll.scrollLeft) > .5) scroll.scrollLeft = left;
 }
 function stepTimelineFrame(direction) {
-  if (!state.project?.clips.length || state.busy || state.captionGesture || state.clipTrim || state.timelineScrub || state.seekDragging || !timelineNavigation) return;
+  if (!total() || state.busy || state.captionGesture || state.clipTrim || state.timelineScrub || state.seekDragging || !timelineNavigation) return;
   const clip = previewClip();
   // Paused media may be clamped before a fractional trim endpoint; the edit playhead remains authoritative.
   let position = state.outputEndSelected ? total() : Number($("fullscreenSeek").value);
@@ -1410,7 +1516,7 @@ function tick() {
   let c = previewClip();
   if (
     state.playing &&
-    c &&
+    c && !state.audioClock &&
     !state.switching &&
     !video.seeking &&
     video.currentTime >= c.end - 0.012
@@ -1427,6 +1533,10 @@ function tick() {
         .reduce((s, c) => s + duration(c), 0) +
       Math.max(0, Math.min(current - c.start, duration(c)));
   }
+  if(state.audioClock) {
+    offset=Math.min(total(),state.audioClock.position+(state.playing?(performance.now()-state.audioClock.at)/1000:0));
+    if(state.playing&&offset>=total()){pause();state.audioClock.position=total();state.outputEndSelected=true;}
+  }
   if (state.outputEndSelected && !state.playing) offset = total();
   if (state.timelineScrub) offset = state.timelineScrub.position;
   else if (state.seekDragging) offset = Number($("fullscreenSeek").value);
@@ -1441,17 +1551,23 @@ function tick() {
     `${time(offset)} / ${time(total())}`,
   );
   $("playhead").style.left = `${offset * state.zoom}px`;
+  syncTimelineAudio(offset);
   followPlayhead(offset);
   $("playheadHandle").setAttribute("aria-valuemax", total());
   $("playheadHandle").setAttribute("aria-valuenow", offset);
   $("playheadHandle").setAttribute("aria-valuetext", time(offset));
   const captionTime = state.outputEndSelected ? Math.max(0, total() - 1 / 30) : offset;
-  const cues = c ? (state.previewCues ||= mappedCues()).filter(cue => cue.start <= captionTime && captionTime < cue.end)
+  const cues = c||state.audioClock ? (state.previewCues ||= mappedCues()).filter(cue => cue.start <= captionTime && captionTime < cue.end)
     : (state.project?.subtitles[previewSource()?.id] || []).filter(cue => cue.timeline_offset === undefined && cue.start <= current && current < cue.end);
   renderCaptionPreview(cues);
   requestAnimationFrame(tick);
 }
 function updateRange(start, end) {
+  if(selectedAudio()) {
+    const v=selectedAudio(),s=state.project.sources.find(s=>s.id===v.source_id);
+    if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end>s.duration||end-start<1/30){toast('请设置音频范围内的入点和出点，至少保留一帧。',true);renderInspector();return;}
+    v.source_start=start;v.source_end=end;v.detached=true;markDirty();render();return;
+  }
   const c = selected(),
     s = source();
   if (!c) return;
@@ -1475,22 +1591,25 @@ function updateRange(start, end) {
 }
 function startClipTrim(event) {
   const handle = event.target.closest("[data-resize-clip]");
-  if (!handle || event.button !== 0 || !event.isPrimary) return;
+  const audioBlock=event.target.closest('[data-audio-index]');
+  if ((!handle&&!audioBlock) || event.button !== 0 || !event.isPrimary) return;
   event.preventDefault(); event.stopPropagation();
   if (state.busy || state.saving || state.clipTrim || state.captionGesture || state.timelineScrub) return;
-  const index = Number(handle.closest("[data-clip]").dataset.clip);
-  const context = captionTiming?.clipResizeContext(state.project, index, handle.dataset.resizeClip);
+  const isAudio=!!audioBlock,index=Number(isAudio?audioBlock.dataset.audioIndex:handle.closest("[data-clip]").dataset.clip);
+  const context = isAudio ? handle?audioTracks.audioResizeContext(state.project,index,handle.dataset.resizeClip):
+    {projectId:state.project.id,index,voice:{...state.project.voiceovers[index]},edge:'move'} :
+    captionTiming?.clipResizeContext(state.project, index, handle.dataset.resizeClip);
   if (!context) return;
   pause();
   const overlay = document.createElement("div");
   overlay.className = "caption-move-label"; overlay.hidden = true; document.body.append(overlay);
-  state.clipTrim = {context, original: state.project.clips[index], pointerId: event.pointerId,
+  state.clipTrim = {context,isAudio,target:isAudio?$("audioTrack"):$("clipTrack"), original: isAudio?state.project.voiceovers[index]:state.project.clips[index], pointerId: event.pointerId,
     clientX: event.clientX, scrollLeft: $("timelineScroll").scrollLeft, zoom: state.zoom,
-    range: context.clip, moved: false, overlay};
+    range: isAudio?context.voice:context.clip, moved: false, overlay};
   // Keep the pressed handle in the DOM and disable native reordering for this gesture.
-  handle.closest("[data-clip]").draggable = false;
-  selectTimelineClip(index, false);
-  $("clipTrack").setPointerCapture(event.pointerId);
+  if(isAudio)selectAudioTrack(index,false);
+  else {handle.closest("[data-clip]").draggable = false;selectTimelineClip(index, false);}
+  state.clipTrim.target.setPointerCapture(event.pointerId);
 }
 function moveClipTrim(event) {
   const gesture = state.clipTrim;
@@ -1499,6 +1618,16 @@ function moveClipTrim(event) {
   const dx = event.clientX - gesture.clientX + $("timelineScroll").scrollLeft - gesture.scrollLeft;
   if (Math.abs(dx) >= 3) gesture.moved = true;
   if (!gesture.moved) return;
+  if(gesture.isAudio) {
+    const context=gesture.context,delta=Math.round(dx/gesture.zoom*30)/30;
+    gesture.range=context.edge==='move'?{...context.voice,start:Math.max(0,Math.min(86400-audioTracks.audioDuration(context.voice,state.project.sources.find(s=>s.id===context.voice.source_id)),context.voice.start+delta))}:
+      audioTracks.resizedAudioClip(context,delta);
+    const block=$("audioTrack").querySelector(`[data-audio-index="${context.index}"]`),source=state.project.sources.find(s=>s.id===context.voice.source_id),range=audioTracks.audioRange(gesture.range,source);
+    if(block){block.style.left=`${gesture.range.start*gesture.zoom}px`;block.style.width=`${(range.end-range.start)*gesture.zoom}px`;block.classList.add('is-trimming');}
+    gesture.overlay.hidden=false;gesture.overlay.textContent=`音频 ${time(gesture.range.start)} · 入点 ${time(range.start)} · 出点 ${time(range.end)}`;
+    gesture.overlay.style.left=`${Math.max(8,Math.min(innerWidth-340,event.clientX+12))}px`;gesture.overlay.style.top=`${Math.max(8,event.clientY-34)}px`;
+    $("timelineCanvas").style.width=`${Math.max(total(),gesture.range.start+range.end-range.start)*gesture.zoom}px`;return;
+  }
   gesture.range = captionTiming.resizedClipRange(gesture.context, Math.round(dx / gesture.zoom * 30) / 30);
   const block = $("clipTrack").querySelector(`[data-clip="${gesture.context.index}"]`);
   if (block) {
@@ -1519,22 +1648,30 @@ function finishClipTrim(event, cancel = false) {
   if (event?.type === "pointerup") moveClipTrim(event);
   state.clipTrim = null;
   gesture.overlay.remove();
-  const track = $("clipTrack");
+  const track = gesture.target;
   if (track.hasPointerCapture(gesture.pointerId)) track.releasePointerCapture(gesture.pointerId);
   state.suppressClipClick = true;
   setTimeout(() => { state.suppressClipClick = false; }, 0);
   const context = gesture.context, range = gesture.range;
-  const current = state.project?.id === context.projectId && state.project.clips[context.index];
-  const changed = range.start !== context.clip.start || range.end !== context.clip.end;
+  const current = state.project?.id === context.projectId && (gesture.isAudio?state.project.voiceovers[context.index]:state.project.clips[context.index]);
+  const changed = JSON.stringify(range)!==JSON.stringify(gesture.isAudio?context.voice:context.clip);
   if (!cancel && event?.type !== "pointercancel" && current === gesture.original && gesture.moved && changed) {
     Object.assign(current, range);
     markDirty();
     render();
+    if(gesture.isAudio){seekOutput(range.start,false);return;}
     const offset = state.project.clips.slice(0, context.index).reduce((n,c) => n + duration(c), 0);
     seekOutput(offset + (context.edge === "start" ? 0 : Math.max(0, duration(range) - 1 / 30)), false);
   } else render();
 }
 function splitClip() {
+  if(selectedAudio()) {
+    if(state.project.voiceovers.length>=32){toast('音频片段数量已达到上限。',true);return;}
+    const v=selectedAudio(),s=state.project.sources.find(s=>s.id===v.source_id),r=audioTracks.audioRange(v,s),at=Number($("fullscreenSeek").value)-v.start;
+    if(at<1/30||r.end-r.start-at<1/30){toast('请将播放头移到音频片段内部再分割。',true);return;}
+    pause();state.project.voiceovers.splice(state.selectedVoice,1,{...v,source_start:r.start,source_end:r.start+at,detached:true},
+      {...v,start:v.start+at,source_start:r.start+at,source_end:r.end,detached:true});markDirty();render();return;
+  }
   const c = selected(),
     at = $("video").currentTime;
   if (!c || c !== previewClip() || at - c.start < 1 / 30 || c.end - at < 1 / 30) {
@@ -1561,6 +1698,10 @@ function moveClip(to) {
   render();
 }
 function removeClip() {
+  if(selectedAudio()) {
+    const position=Number($("fullscreenSeek").value);pause();state.project=audioTracks.removeAudioClip(state.project,state.selectedVoice);
+    state.selectedVoice=-1;state.clipboardKind='clip';markDirty();render();if(total())seekOutput(Math.min(position,total()),false);return;
+  }
   if (!selected()) return;
   pause();
   state.project.clips.splice(state.clip, 1);
@@ -1569,6 +1710,24 @@ function removeClip() {
   markDirty();
   render();
   if (selected()) setPreview(selected().start);
+  else if(total())seekOutput(Math.min(Number($("fullscreenSeek").value),total()),false);
+}
+function selectAudioTrack(index,renderAll=true) {
+  if(!state.project?.voiceovers[index])return;
+  state.previewContext ||= {clip:previewClip(),sourceId:previewSource()?.id||state.source};
+  state.source=state.project.voiceovers[index].source_id;
+  state.clipboardKind='voice';state.selectedVoice=index;state.subtitleSelection.clear();
+  if(renderAll)render();else {for(const block of $("audioTrack").querySelectorAll('[data-audio-index]'))block.classList.toggle('selected',Number(block.dataset.audioIndex)===index);renderInspector();renderVoiceovers();updateButtons();}
+  document.querySelector('[data-tab="clip"]').click();
+}
+function detachSelectedAudio() {
+  try {
+    const position=Number($("fullscreenSeek").value),index=state.clip;pause();
+    const result=audioTracks.detachClipAudio(state.project,index);
+    state.project=result.project;state.previewContext=null;state.selectedVoice=-1;state.clipboardKind='clip';
+    markDirty();render();seekOutput(position,false);selectTimelineClip(index);toast('音频已分离，可在音频轨单独移动、裁剪或删除。');
+    return result.index;
+  }catch(error){toast(error.message,true);return -1;}
 }
 async function pollJobs() {
   if (!state.project) return;
@@ -1706,6 +1865,10 @@ $("clipTrack").ondrop = (e) => {
 };
 $("clipTrack").addEventListener("pointerdown", startClipTrim);
 $("clipTrack").addEventListener("lostpointercapture", event => finishClipTrim(event, true));
+$("audioTrack").addEventListener("pointerdown", startClipTrim);
+$("audioTrack").addEventListener("lostpointercapture",event=>finishClipTrim(event,true));
+$("audioTrack").onclick=event=>{if(state.suppressClipClick)return;const block=event.target.closest('[data-audio-index]');if(block)selectAudioTrack(Number(block.dataset.audioIndex));};
+$("audioTrack").onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();const block=event.target.closest('[data-audio-index]');if(block)selectAudioTrack(Number(block.dataset.audioIndex));}};
 document.addEventListener("pointermove", moveClipTrim);
 document.addEventListener("pointerup", finishClipTrim);
 document.addEventListener("pointercancel", event => finishClipTrim(event, true));
@@ -1720,7 +1883,7 @@ document.addEventListener("pointerup", finishTimelineScrub);
 document.addEventListener("pointercancel", finishTimelineScrub);
 $("playheadHandle").onclick = (event) => event.stopPropagation();
 $("timelineCanvas").addEventListener("click", event => {
-  if (state.suppressClipClick || event.defaultPrevented || event.target.closest("[data-clip], [data-caption-occurrence], #captionTrack, #ruler, #playheadHandle")) return;
+  if (state.suppressClipClick || event.defaultPrevented || event.target.closest("[data-clip], [data-audio-index], [data-caption-occurrence], #captionTrack, #ruler, #playheadHandle")) return;
   seekTimelineAt(event.clientX);
 });
 $("playheadHandle").ondragstart = (event) => event.preventDefault();
@@ -1817,14 +1980,19 @@ for (const [id, delta] of [["timelineZoomOut", -5], ["timelineZoomIn", 5]])
     renderTimeline();
   };
 $("splitBtn").onclick = splitClip;
+$("detachAudioBtn").onclick=detachSelectedAudio;
 $("removeClipBtn").onclick = removeClip;
 $("trimStart").onchange = () =>
   updateRange(Number($("trimStart").value), Number($("trimEnd").value));
 $("trimEnd").onchange = $("trimStart").onchange;
 $("setInBtn").onclick = () =>
-  selected() && updateRange($("video").currentTime, selected().end);
+  selectedAudio()?setAudioRangeAtPlayhead('start'):selected() && updateRange($("video").currentTime, selected().end);
 $("setOutBtn").onclick = () =>
-  selected() && updateRange(selected().start, $("video").currentTime);
+  selectedAudio()?setAudioRangeAtPlayhead('end'):selected() && updateRange(selected().start, $("video").currentTime);
+function setAudioRangeAtPlayhead(edge) {
+  const v=selectedAudio(),s=state.project.sources.find(s=>s.id===v.source_id),r=audioTracks.audioRange(v,s),at=r.start+Number($("fullscreenSeek").value)-v.start;
+  if(edge==='start')updateRange(at,r.end);else updateRange(r.start,at);
+}
 $("moveLeftBtn").onclick = () => moveClip(state.clip - 1);
 $("moveRightBtn").onclick = () => moveClip(state.clip + 1);
 $("appendBtn").onclick = () => {
@@ -1853,11 +2021,12 @@ $("voiceoverList").oninput = (e) => {
   );
   markDirty(`voice:${row.dataset.voice}:${field}`);
   renderTimeline();
+  renderInspector();updateButtons();
 };
 $("voiceoverList").addEventListener("pointerdown", event => {
   const row = event.target.closest("[data-voice]");
   if (!row) return;
-  state.clipboardKind = "voice"; state.selectedVoice = Number(row.dataset.voice);
+  state.clipboardKind = "voice"; state.selectedVoice = Number(row.dataset.voice);renderInspector();updateButtons();
   for (const item of $("voiceoverList").querySelectorAll("[data-voice]")) item.classList.toggle("selected", item === row);
 });
 $("voiceoverList").onclick = (e) => {
@@ -2040,8 +2209,10 @@ function addCaption() {
   pause();
   const cues = state.project.subtitles[s.id];
   const clip = selected();
-  const limit = clip?.source_id === s.id ? clip.end : s.duration;
-  const requested = Math.max($("video").currentTime, clip?.start || 0);
+  const audio=selectedAudio(),range=audio?audioTracks.audioRange(audio,s):null,position=Number($("fullscreenSeek").value);
+  if(audio&&(position<audio.start||position>=audio.start+range.end-range.start)){toast('请将播放头移到选中音频片段内部。',true);return;}
+  const limit = audio?range.end:clip?.source_id === s.id ? clip.end : s.duration;
+  const requested = audio?range.start+position-audio.start:Math.max($("video").currentTime, clip?.start || 0);
   const originals = cues.filter(c=>c.timeline_offset===undefined);
   let start = requested;
   for (const c of originals) if (start >= c.start && start < c.end) start = c.end;
@@ -2098,7 +2269,7 @@ function selectedExportOptions() {
 }
 async function updateExportEstimate() {
   const { exportProfile } = await exportOptionsReady;
-  const source = state.project?.sources.find(s => s.id === state.project.clips[0]?.source_id);
+  const source = state.project?.sources.find(s => s.id === (state.project.clips[0]?.source_id||state.project.voiceovers?.[0]?.source_id));
   if (!source) return;
   const sample = $("exportPreset").value === "feishu";
   $("standardExportSettings").hidden = sample;
@@ -2168,7 +2339,7 @@ function handleEditorKeydown(e) {
   )
     return;
   if (e.key === "Delete") {
-    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat || state.busy || !selected())
+    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat || state.busy || (!selected()&&!selectedAudio()))
       return;
     e.preventDefault();
     removeClip();
@@ -2306,7 +2477,7 @@ async function health() {
 }
 (async () => {
   try {
-    await Promise.all([subtitleStyleReady, editHistoryReady, captionTimingReady, timelineClipboardReady, timelineNavigationReady]);
+    await Promise.all([subtitleStyleReady, editHistoryReady, captionTimingReady, timelineClipboardReady, timelineNavigationReady,audioTracksReady]);
     setAudioView(localStorage.getItem("cutccc-audio-view") || "waveform");
     await health();
     await projectOptions();

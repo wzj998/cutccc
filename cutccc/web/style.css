@@ -691,7 +691,7 @@ kbd {
   padding: 0;
 }
 .timeline-scroll {
-  height: calc(145px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
+  height: calc(145px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px) + var(--audio-track-height, 0px));
   overflow-x: auto;
   overflow-y: hidden;
   margin-left: 22px;
@@ -701,7 +701,7 @@ kbd {
 .timeline-canvas {
   position: relative;
   min-width: 100%;
-  height: calc(135px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
+  height: calc(135px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px) + var(--audio-track-height, 0px));
 }
 .timeline-canvas:has(.timeline-clip) {
   cursor: crosshair;
@@ -767,6 +767,13 @@ kbd {
 .timeline-clip .clip-resize-handle.end { right: 0; }
 .timeline-clip .clip-resize-handle:hover, .timeline-clip.is-trimming .clip-resize-handle { background: #aff2bd88; }
 .timeline-clip.is-trimming { outline: 1px solid var(--accent); outline-offset: -1px; }
+.audio-track { position: relative; margin-top: 5px; background: #101a17; border-radius: 4px; touch-action: none; user-select: none; }
+.timeline-audio { position: absolute; height: 32px; background: #214537; }
+.timeline-audio > span:not(.clip-resize-handle) { top: 2px; z-index: 1; font-size: 9px; pointer-events: none; }
+.audio-waveform { position: absolute; bottom: 0; height: 20px; pointer-events: none; opacity: .8; }
+#videoFrame.audio-only { background: #000; }
+#videoFrame.audio-only video { visibility: hidden; }
+.timeline-actions { flex-wrap: wrap; }
 .timeline-clip:after {
   content: "";
   position: absolute;
@@ -1253,7 +1260,7 @@ dialog p {
   .timeline-panel {
     height: calc(297px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
   }
-  .timeline-scroll {
+.timeline-scroll {
     height: calc(170px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
   }
   .welcome {

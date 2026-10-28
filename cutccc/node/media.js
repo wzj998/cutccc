@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import {audioRange,audioDuration,projectDuration} from "../web/audio-tracks.js";
 import os from "node:os";
 import path from "node:path";
 import { capture } from "./processes.js";
@@ -138,7 +139,7 @@ export async function render(
 ) {
   const clips = project.clips,
     sources = new Map(project.sources.map((s) => [s.id, s]));
-  if (!clips.length)
+  if (!clips.length && !(project.voiceovers || []).some(v=>v.detached))
     throw new APIError("Add at least one clip before exporting");
   const encoder = process.env.CUTCCC_EXPORT_ENCODER || "libx264",
     hw = process.env.CUTCCC_EXPORT_HWACCEL || "";
@@ -149,7 +150,8 @@ export async function render(
   const voices = project.voiceovers || [];
   const audibleVoices = voices.filter(v => (v.volume ?? 1) > 0);
   validateVoiceovers(project.sources, clips, voices);
-  const profile = exportProfile(sources.get(clips[0].source_id), options, outputDuration(clips));
+  const seconds=projectDuration(project);
+  const profile = exportProfile(sources.get(clips[0]?.source_id || voices[0]?.source_id), options, seconds);
   const { width, height, fps } = profile;
   const args = ["-nostdin", "-v", "error", "-y"],
     filters = [];
@@ -183,7 +185,7 @@ export async function render(
     filters.push(
       `[${i}:v:0]${clipVideoFilter(c,width,height,fps,frames,rotation)}[v${i}]`,
     );
-    if (sources.get(c.source_id).has_audio)
+    if (sources.get(c.source_id).has_audio && !c.muted)
       filters.push(
         `[${i}:a:0]atrim=start=0:end=${c.end - c.start},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=duration=${duration}[a${i}]`,
       );
@@ -192,23 +194,28 @@ export async function render(
         `anullsrc=r=48000:cl=stereo,atrim=duration=${duration}[a${i}]`,
       );
   }
-  filters.push(
-    clips.map((_, i) => `[v${i}][a${i}]`).join("") +
-      `concat=n=${clips.length}:v=1:a=1[vcat][acat]`,
-  );
-  let audio = "[acat]";
+  if(clips.length) {
+    filters.push(clips.map((_, i) => `[v${i}][a${i}]`).join("") + `concat=n=${clips.length}:v=1:a=1[vcat][acat]`);
+    filters.push(`[vcat]tpad=stop_mode=add:color=black:stop_duration=${Math.max(0,seconds-outputDuration(clips)).toFixed(6)},trim=duration=${seconds}[vbase]`);
+    filters.push(`[acat]apad,atrim=duration=${seconds}[abase]`);
+  } else {
+    filters.push(`color=c=black:s=${width}x${height}:r=${fps}:d=${seconds}[vbase]`);
+    filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${seconds}[abase]`);
+  }
+  let audio = "[abase]";
   if (audibleVoices.length) {
     const ranges = [];
     for (const [j, v] of audibleVoices.entries()) {
       const source = sources.get(v.source_id),
         index = clips.length + j;
-      args.push("-i", await sourcePath(v.source_id));
-      ranges.push(`between(t,${v.start},${v.start + source.duration})`);
+      const range=audioRange(v,source),length=audioDuration(v,source);
+      args.push("-ss",String(range.start),"-t",String(length),"-i", await sourcePath(v.source_id));
+      if(!v.detached)ranges.push(`between(t,${v.start},${v.start + length})`);
       filters.push(
-        `[${index}:a:0]atrim=duration=${source.duration},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${v.volume ?? 1},adelay=${Math.round(v.start * 1000)}:all=1[voice${j}]`,
+        `[${index}:a:0]atrim=duration=${length},asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${v.volume ?? 1},adelay=${Math.round(v.start * 1000)}:all=1[voice${j}]`,
       );
     }
-    filters.push(`[acat]volume=0.3:enable='${ranges.join("+")}'[ducked]`);
+    filters.push(ranges.length?`[abase]volume=0.3:enable='${ranges.join("+")}'[ducked]`:"[abase]anull[ducked]");
     filters.push(
       "[ducked]" +
         audibleVoices.map((_, j) => `[voice${j}]`).join("") +
@@ -218,11 +225,11 @@ export async function render(
   }
   const cues = mapSubtitles(clips, project.subtitles, voices, project.sources);
   await fs.writeFile(path.join(folder, "subtitles.srt"), toSrt(cues), "utf8");
-  await fs.writeFile(path.join(folder, "subtitles.ass"), toAss(profile.preset === "feishu" ? wrapExportCues(cues,width,height) : cues, width, height), "utf8");
-  let video = "[vcat]";
+  await fs.writeFile(path.join(folder, "subtitles.ass"), toAss(wrapExportCues(cues,width,height), width, height), "utf8");
+  let video = "[vbase]";
   if (burnSubtitles && cues.length) {
     filters.push(
-      "[vcat]ass=subtitles.ass[vout]",
+      "[vbase]ass=subtitles.ass[vout]",
     );
     video = "[vout]";
   }
@@ -258,9 +265,9 @@ export async function render(
       "-map",
       audio,
       "-frames:v",
-      String(clips.reduce((n, c) => n + clipFrames(c), 0) * fps / FPS),
+      String(Math.round(seconds*fps)),
       "-t",
-      String(outputDuration(clips)),
+      String(seconds),
       ...encoding,
       "-pix_fmt",
       "yuv420p",
@@ -276,7 +283,7 @@ export async function render(
       "video.mp4",
     ];
     await fs.writeFile(path.join(folder,"render-plan.json"),JSON.stringify({profile,clips:plans,early_fps:true,attempts},null,2));
-    await runProcess("ffmpeg", exportArgs, folder, outputDuration(clips));
+    await runProcess("ffmpeg", exportArgs, folder, seconds);
     size = (await fs.stat(path.join(folder,"video.mp4"))).size;
     if (!profile.maxBytes || size < profile.maxBytes) break;
     if (attempt === 1) throw new APIError("样片仍超过30 MB，请分段导出。文件保留在任务目录中。");
@@ -285,7 +292,7 @@ export async function render(
     if (profile.bitrate < 80) throw new APIError("样片时长过长，请分段导出以保持可读画质。");
   }
   const result = await probe(path.join(folder, "video.mp4"));
-  if (Math.abs(result.duration - outputDuration(clips)) > 0.1)
+  if (Math.abs(result.duration - seconds) > 0.1)
     throw new Error("Export duration does not match the edit");
   return {
     duration: result.duration,

@@ -1,9 +1,10 @@
 import {validateStyle} from './subtitle-style.js';
+import {audioRange,audioDuration,projectDuration,videoDuration} from './audio-tracks.js';
 export const CLIPBOARD_PREFIX = 'cutccc-timeline:v1\n';
 export const CLIPBOARD_MIME = 'application/x-cutccc-timeline';
 const frames = c => Math.max(1, Math.round((c.end - c.start) * 30));
 const duration = c => frames(c) / 30;
-const total = p => p.clips.reduce((n,c) => n + duration(c),0);
+const total = projectDuration;
 const finite = n => typeof n === 'number' && Number.isFinite(n);
 const clone = value => structuredClone(value);
 const fail = message => {throw new Error(message);};
@@ -23,11 +24,11 @@ export function copyTimelineItems(project, kind, index, placements = []) {
   if (kind === 'clip') {
     const clip = project.clips[index];
     if (!clip) fail('请先选中时间轴上的视频片段。');
-    result.items = [clone(clip)];
+    const item=clone(clip);delete item.audio_link;result.items = [item];
   } else if (kind === 'voice') {
     const voice = project.voiceovers?.[index];
     if (!voice) fail('请先选中旁白音频。');
-    result.items = [clone(voice)];
+    const item=clone(voice);delete item.link_id;result.items = [item];
   } else if (kind === 'captions') {
     if (!placements.length) fail('请先选中时间轴上的字幕。');
     const first = Math.min(...placements.map(c => c.start));
@@ -38,7 +39,7 @@ export function copyTimelineItems(project, kind, index, placements = []) {
       const index = Number(rawIndex);
       let offset;
       if (cue.timeline_offset !== undefined) offset = cue.timeline_offset;
-      else if (type === 'voice') offset = project.voiceovers[index].start;
+      else if (type === 'voice') offset = project.voiceovers[index].start-audioRange(project.voiceovers[index],project.sources.find(s=>s.id===mapped.sourceId)).start;
       else offset = project.clips.slice(0,index).reduce((n,c)=>n+duration(c),0) - project.clips[index].start;
       offset += cue.shift || 0;
       return {source_id:mapped.sourceId,start:mapped.start-offset,end:mapped.end-offset,
@@ -79,17 +80,20 @@ export function pasteTimelineItems(project, payload, position) {
     if (payload.items.length !== 1) fail('一次粘贴一个旁白音频。');
     const item=payload.items[0],source=sourceFor(item),volume=item.volume??1;
     if (!source.has_audio || !finite(volume)||volume<0||volume>2) fail('旁白音频无效。');
-    if (at+source.duration>total(p)+.001) fail('播放位置之后的空间不足以容纳旁白音频。');
+    const range=audioRange(item,source),length=audioDuration(item,source);
+    if(!finite(range.start)||!finite(range.end)||range.start<0||range.end>source.duration+.001||length<1/30-1e-9)fail('复制的音频范围无效。');
+    if ((!item.detached&&at+length>total(p)+.001)||at+length>86400) fail('播放位置之后的空间不足以容纳音频。');
     p.voiceovers ||= [];
     if (p.voiceovers.length>=32) fail('旁白音频数量已达到上限。');
-    p.voiceovers.push({source_id:source.id,start:at,volume});
+    p.voiceovers.push({...item,source_id:source.id,start:at,volume});
     return {project:p,kind:'voice',position:at,index:p.voiceovers.length-1};
   }
   if (payload.kind !== 'clip' || payload.items.length !== 1) fail('无效的视频片段复制内容。');
+  if(at>videoDuration(p)+.001)fail('请在视频轨范围内粘贴视频片段。');
   const item=payload.items[0],source=sourceFor(item);
   if (!finite(item.start)||!finite(item.end)||item.start<0||item.end>source.duration+.001||item.end-item.start<1/30)
     fail('复制的视频片段范围无效。');
-  const copied={source_id:source.id,start:item.start,end:item.end}, added=duration(copied);
+  const copied={source_id:source.id,start:item.start,end:item.end,...(item.muted?{muted:true}:{})}, added=duration(copied);
   let offset=0,insertion=p.clips.length;
   for(let i=0;i<p.clips.length;i++) {
     const c=p.clips[i],length=duration(c);

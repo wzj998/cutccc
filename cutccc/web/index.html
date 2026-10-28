@@ -245,6 +245,7 @@
             </div>
             <div class="timeline-actions">
               <button id="timelineAddCaptionBtn" class="button small" title="在当前预览位置新增字幕" disabled>＋ 新增字幕到时间轴</button>
+              <button id="detachAudioBtn" class="button small" title="将选中视频的原声分离到音频轨" disabled>♫ 音频分离</button>
               <button id="splitBtn" class="button small" disabled>
                 ✂ 在播放头处分割 <kbd>S</kbd></button
               ><button
@@ -281,11 +282,12 @@
           <div id="timelineScroll" class="timeline-scroll">
             <div id="timelineCanvas" class="timeline-canvas">
               <div id="ruler" class="ruler"></div>
-              <div id="clipTrack" class="clip-track" aria-keyshortcuts="Control+c Control+v Meta+c Meta+v">
+              <div id="clipTrack" class="clip-track" aria-label="视频轨" aria-keyshortcuts="Control+c Control+v Meta+c Meta+v">
                 <div class="timeline-placeholder">
                   导入视频后，片段将出现在这里
                 </div>
               </div>
+              <div id="audioTrack" class="audio-track" aria-label="音频轨" hidden></div>
               <div id="captionTrack" class="caption-track" tabindex="0" aria-label="字幕时间轴" aria-keyshortcuts="Control+c Control+v Meta+c Meta+v" title="单击编辑，不移动播放头；Ctrl/⌘点击多选，Shift连续选择；空白处单击定位、拖动框选；Ctrl+C复制，Ctrl+V粘贴到播放位置；拖动所选字幕调整时间"></div>
               <div id="playhead" class="playhead" hidden>
                 <span id="playheadHandle" role="slider" tabindex="0"
@@ -349,9 +351,9 @@
             ＋ 再次添加此素材
           </button>
           <div class="inspector-rule"></div>
-          <div class="section-label">旁白</div>
+          <div class="section-label">音频</div>
           <p class="muted">
-            旁白按成片时间放置，可单独移除语音并保留字幕。只有有声旁白播放期间会降低原声。下方可试听原音频。
+            分离的音频可在时间轴上独立移动、裁剪和删除。删除音频时保留字幕；分离的原声不会触发旁白压低效果。
           </p>
           <button id="addVoiceoverBtn" class="button secondary full" disabled>
             ＋ 将当前素材音频作为旁白

@@ -59,7 +59,7 @@ function editBody(b) {
     fail("revision must be a positive integer", 422);
   if (!Array.isArray(b.clips)) fail("clips must be an array", 422);
   for (const c of b.clips)
-    object(c, ["source_id", "start", "end"], ["source_id", "start", "end"]);
+    object(c, ["source_id", "start", "end", "muted", "audio_link"], ["source_id", "start", "end"]);
   if (
     !b.subtitles ||
     typeof b.subtitles !== "object" ||
@@ -74,7 +74,7 @@ function editBody(b) {
   if (b.voiceovers !== undefined && b.voiceovers !== null) {
     if (!Array.isArray(b.voiceovers)) fail("voiceovers must be an array", 422);
     for (const v of b.voiceovers)
-      object(v, ["source_id", "start", "volume"], ["source_id", "start"]);
+      object(v, ["source_id", "start", "volume", "source_start", "source_end", "detached", "link_id"], ["source_id", "start"]);
   }
   return b;
 }
@@ -269,7 +269,7 @@ export function openapi() {
     ),
     ImportPath: schema({ path: { type: "string", minLength: 1 } }, ["path"]),
     RemoveSource: schema({revision: {type: "integer", minimum: 1}}, ["revision"]),
-    Clip: schema({ source_id: str, start: number, end: number }, [
+    Clip: schema({ source_id: str, start: number, end: number, muted:{type:"boolean"},audio_link:str }, [
       "source_id",
       "start",
       "end",
@@ -295,6 +295,8 @@ export function openapi() {
         source_id: str,
         start: { type: "number", minimum: 0 },
         volume: { type: "number", minimum: 0, maximum: 2, default: 1 },
+        source_start:{type:"number",minimum:0},source_end:{type:"number",minimum:0},
+        detached:{type:"boolean"},link_id:str,
       },
       ["source_id", "start"],
     ),
@@ -432,6 +434,7 @@ export async function startServer(options = {}) {
             "edit-history.js",
             "export-options.js",
             "caption-timing.js",
+            "audio-tracks.js",
             "timeline-clipboard.js",
             "timeline-navigation.js",
             "style.css",

@@ -1,4 +1,5 @@
 import { validateStyle } from "../web/subtitle-style.js";
+import {audioRange,audioDuration,projectDuration,ownsAudioCaptions} from "../web/audio-tracks.js";
 export const FPS = 30;
 export class APIError extends Error {
   constructor(message, status = 400) {
@@ -40,6 +41,8 @@ export function validateEdit(sources, clips, subtitles) {
     if (!c || !durations.has(c.source_id)) fail("Unknown clip source");
     if (!finite(c.start) || !finite(c.end))
       fail("Clip times must be finite numbers");
+    if(c.muted!==undefined&&typeof c.muted!=="boolean")fail("Clip muted must be boolean");
+    if(c.audio_link!==undefined&&(typeof c.audio_link!=="string"||!c.audio_link||c.audio_link.length>80))fail("Invalid audio link");
     if (
       !(
         0 <= c.start &&
@@ -92,7 +95,12 @@ export function validateVoiceovers(sources, clips, voices) {
     const volume = v.volume ?? 1;
     if (!finite(v.start) || !finite(volume))
       fail("Voiceover start and volume must be finite numbers");
-    if (v.start < 0 || v.start + source.duration > outputDuration(clips) + 0.05)
+    const range=audioRange(v,source);
+    if(!finite(range.start)||!finite(range.end)||range.start<0||range.end>source.duration+.001||range.end-range.start<1/30-1e-9)
+      fail("Audio trim must be within the source and retain at least one frame");
+    if(v.detached!==undefined&&typeof v.detached!=="boolean")fail("Audio detached must be boolean");
+    if(v.link_id!==undefined&&(typeof v.link_id!=="string"||!v.link_id||v.link_id.length>80))fail("Invalid audio link");
+    if (v.start < 0 || v.start+audioDuration(v,source)>86400 || (!v.detached && v.start + audioDuration(v,source) > outputDuration(clips) + 0.05))
       fail("Voiceover must fit within the output timeline");
     if (volume < 0 || volume > 2)
       fail("Voiceover volume must be between 0 and 2");
@@ -100,11 +108,13 @@ export function validateVoiceovers(sources, clips, voices) {
 }
 const millis = (n) => roundEven(n * 1000) / 1000;
 export function mapSubtitles(clips, subtitles, voiceovers = [], sources = []) {
+  const project={clips,subtitles,voiceovers,sources};
   let offset = 0;
   const cues = [];
   for (const clip of clips) {
     const duration = clipFrames(clip) / FPS;
     for (const c of subtitles[clip.source_id] || []) {
+      if(ownsAudioCaptions(project,clip))continue;
       if (c.timeline_offset !== undefined) continue;
       const start = Math.max(clip.start, c.start),
         end = Math.min(clip.end, c.end, clip.start + duration);
@@ -122,11 +132,12 @@ export function mapSubtitles(clips, subtitles, voiceovers = [], sources = []) {
   for (const voice of voiceovers) {
     const source = sources.find(s => s.id === voice.source_id);
     if (!source) continue;
+    const range=audioRange(voice,source);
     for (const cue of subtitles[voice.source_id] || []) {
       if (cue.timeline_offset !== undefined) continue;
-      const start = Math.max(0, cue.start), end = Math.min(cue.end, source.duration, offset - voice.start);
+      const start = Math.max(range.start, cue.start), end = Math.min(cue.end, range.end, projectDuration(project) - voice.start + range.start);
       if (end - start >= .001) cues.push({
-        start: millis(voice.start + start), end: millis(voice.start + end), text: cue.text,
+        start: millis(voice.start + start-range.start), end: millis(voice.start + end-range.start), text: cue.text,
         ...(cue.style === undefined ? {} : {style: structuredClone(cue.style)}),
         ...(cue.shift === undefined ? {} : {shift: cue.shift}),
       });
@@ -138,7 +149,7 @@ export function mapSubtitles(clips, subtitles, voiceovers = [], sources = []) {
       ...(cue.style === undefined ? {} : {style: structuredClone(cue.style)}), shift: cue.shift || 0});
   }
   return cues.map(({shift = 0, ...cue}) => ({...cue,
-    start: millis(Math.max(0, cue.start + shift)), end: millis(Math.min(offset, cue.end + shift)),
+    start: millis(Math.max(0, cue.start + shift)), end: millis(Math.min(projectDuration(project), cue.end + shift)),
   })).filter(cue => cue.end > cue.start).sort((a, b) => a.start - b.start);
 }
 export function timestamp(seconds) {

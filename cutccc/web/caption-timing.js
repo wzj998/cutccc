@@ -1,3 +1,4 @@
+import {audioRange,audioDuration,projectDuration} from './audio-tracks.js';
 const duration = clip => Math.round((clip.end - clip.start) * 30) / 30;
 
 // Clip trims use the source clock. Fixed-time overlays must still fit after a trim.
@@ -10,7 +11,7 @@ export function clipResizeContext(project, index, edge) {
   let overlayEnd = 0;
   for (const voice of project.voiceovers || []) {
     const audio = project.sources.find(s => s.id === voice.source_id);
-    if (audio) overlayEnd = Math.max(overlayEnd, voice.start + audio.duration);
+    if (audio&&!voice.detached) overlayEnd = Math.max(overlayEnd, voice.start + audioDuration(voice,audio));
   }
   for (const cues of Object.values(project.subtitles || {})) for (const cue of cues) {
     if (cue.timeline_offset !== undefined)
@@ -39,7 +40,7 @@ export function captionResizeContext(project, mapped, edge) {
   if (!mapped || !["start", "end"].includes(edge)) return null;
   const cues = project.subtitles[mapped.sourceId], cue = cues?.[mapped.index];
   if (!cue) return null;
-  const total = project.clips.reduce((n, c) => n + duration(c), 0);
+  const total = projectDuration(project);
   const [kind, rawIndex] = mapped.occurrence.split(":"), index = Number(rawIndex);
   let offset, lower, upper;
   if (cue.timeline_offset !== undefined) {
@@ -55,7 +56,8 @@ export function captionResizeContext(project, mapped, edge) {
     const voice = project.voiceovers?.[index];
     const source = project.sources.find(s => s.id === mapped.sourceId);
     if (!voice || !source || voice.source_id !== mapped.sourceId) return null;
-    offset = voice.start; lower = 0; upper = Math.min(source.duration, total - voice.start);
+    const range=audioRange(voice,source);
+    offset = voice.start-range.start; lower = range.start; upper = Math.min(range.end, total - voice.start+range.start);
   } else return null;
   offset += cue.shift || 0;
   const original = cues.filter(c => c.timeline_offset === undefined), originalIndex = original.indexOf(cue);
