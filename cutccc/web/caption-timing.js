@@ -1,5 +1,39 @@
 const duration = clip => Math.round((clip.end - clip.start) * 30) / 30;
 
+// Clip trims use the source clock. Fixed-time overlays must still fit after a trim.
+export function clipResizeContext(project, index, edge) {
+  if (!project || !["start", "end"].includes(edge)) return null;
+  const clip = project.clips[index];
+  const source = project.sources.find(s => s.id === clip?.source_id);
+  if (!clip || !source) return null;
+  const total = project.clips.reduce((n, c) => n + duration(c), 0);
+  let overlayEnd = 0;
+  for (const voice of project.voiceovers || []) {
+    const audio = project.sources.find(s => s.id === voice.source_id);
+    if (audio) overlayEnd = Math.max(overlayEnd, voice.start + audio.duration);
+  }
+  for (const cues of Object.values(project.subtitles || {})) for (const cue of cues) {
+    if (cue.timeline_offset !== undefined)
+      overlayEnd = Math.max(overlayEnd, cue.end + cue.timeline_offset + (cue.shift || 0));
+  }
+  const required = Math.max(1 / 30, Math.ceil((overlayEnd - total + duration(clip)) * 30 - 1e-7) / 30);
+  const minimumLength = Math.min(clip.end - clip.start, required);
+  const base = clip[edge];
+  const lower = edge === "start" ? 0 : clip.start + minimumLength;
+  const upper = edge === "start" ? clip.end - minimumLength : source.duration;
+  return {projectId: project.id, index, edge, clip: {...clip}, base,
+    minimum: lower - base, maximum: upper - base, total};
+}
+
+export function resizedClipRange(context, delta) {
+  const bounded = Math.max(context.minimum, Math.min(context.maximum, delta));
+  if (bounded === 0) return {...context.clip};
+  const value = context.base + bounded;
+  const boundary = Math.max(context.base + context.minimum, Math.min(context.base + context.maximum,
+    Math.round(value * 1e6) / 1e6));
+  return {...context.clip, [context.edge]: boundary};
+}
+
 // Source-clock bounds for one visible occurrence, including shifts and trimmed clips.
 export function captionResizeContext(project, mapped, edge) {
   if (!mapped || !["start", "end"].includes(edge)) return null;

@@ -762,6 +762,11 @@ kbd {
 .timeline-clip.selected {
   background: #3c5c46;
 }
+.timeline-clip .clip-resize-handle { position: absolute; top: 0; bottom: 0; left: auto; right: auto; width: min(8px, 25%); cursor: ew-resize; z-index: 5; touch-action: none; }
+.timeline-clip .clip-resize-handle.start { left: 0; }
+.timeline-clip .clip-resize-handle.end { right: 0; }
+.timeline-clip .clip-resize-handle:hover, .timeline-clip.is-trimming .clip-resize-handle { background: #aff2bd88; }
+.timeline-clip.is-trimming { outline: 1px solid var(--accent); outline-offset: -1px; }
 .timeline-clip:after {
   content: "";
   position: absolute;
