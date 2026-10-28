@@ -87,18 +87,26 @@
           <div class="subtitle-add-toolbar">
             <button id="addCaptionBtn" class="button secondary" title="在当前素材的预览位置添加字幕" disabled>＋ 新增字幕到时间轴</button>
           </div>
-          <details class="subtitle-recognition"><summary>自动生成字幕</summary>
-          <div class="section-label">为当前素材生成字幕</div>
+          <details class="subtitle-recognition" open><summary>生成字幕</summary>
+          <div class="recognition-content">
+          <div class="section-label">当前识别素材</div>
+          <div id="recognitionTarget" class="recognition-target">请先选择素材</div>
+          <div class="recognition-language">
           <label class="field-label" for="recognitionLanguage">识别语言</label>
           <select id="recognitionLanguage">
-            <option value="auto">中英自动识别 · 保留原文</option>
+            <option value="auto">中文 / 英文 · 保留原文</option>
             <option value="Chinese">中文</option>
             <option value="English">英文原文</option>
           </select>
-          <button id="transcribeBtn" class="button primary full" disabled>
-            ✧ 自动识别人声并生成字幕
+          </div>
+          <button id="transcribeBtn" class="button primary full" aria-describedby="recognitionSteps modelHint" disabled>
+            ✧ 识别人声并生成字幕
           </button>
-          <div id="modelHint" class="muted model-hint">正在检查字幕模型…</div>
+          <p id="recognitionSteps" class="recognition-steps">全片扫描 · 降噪 · 短句 · 对齐</p>
+          <progress id="recognitionProgress" max="100" value="0" aria-label="字幕识别进度" hidden></progress>
+          <div id="modelHint" class="muted model-hint" role="status">正在检查字幕模型…</div>
+          <div id="recognitionResult" class="recognition-result" hidden></div>
+          </div>
           </details>
           <div class="subtitle-selection-tools">
             <select id="subtitleScope" aria-label="字幕列表范围">

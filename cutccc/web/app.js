@@ -199,22 +199,39 @@ function updateButtons() {
   $("addVoiceoverBtn").disabled = !src?.has_audio || !total() || state.busy;
   $("addCaptionBtn").disabled = !src || state.busy;
   $("timelineAddCaptionBtn").disabled = !src || state.busy;
-  const running = state.jobs.some(
+  const running = state.jobs.find(
     (j) =>
       j.kind === "transcribe" &&
       j.source_id === state.source &&
       ["queued", "running"].includes(j.status),
   );
   $("transcribeBtn").disabled =
-    !src || !src.has_audio || !state.modelsReady || state.busy || running;
-  $("recognitionLanguage").disabled = state.busy || running;
-  $("modelHint").textContent = !state.modelsReady
-    ? "字幕模型未下载，请按使用说明运行 cutccc download。"
-    : src && !src.has_audio
+    !src || !src.has_audio || !state.modelsReady || state.busy || !!running;
+  $("transcribeBtn").textContent = running
+    ? running.status === "queued" ? "✧ 字幕识别排队中…" : "✧ 正在识别人声…"
+    : "✧ 识别人声并生成字幕";
+  $("recognitionLanguage").disabled = !src || state.busy || !!running;
+  $("recognitionTarget").textContent = src?.name || "请先选择素材";
+  $("recognitionTarget").title = src?.name || "";
+  $("recognitionProgress").hidden = !running;
+  $("recognitionProgress").value = running?.progress || 0;
+  $("modelHint").textContent = !src
+    ? "先选择一个素材，再识别其中完整音轨的人声。"
+    : !src.has_audio
       ? "此素材没有音轨，可手动添加字幕。"
-      : running
-        ? "正在后台生成字幕，可在下方查看进度。"
-        : "保留中文和英文原文；降噪复听后，疑似遗漏和不确定区间会列入复核清单。";
+      : !state.modelsReady
+        ? "字幕模型未下载，请按使用说明运行 cutccc download。"
+        : running
+          ? running.message || "正在后台识别人声。"
+          : state.busy
+            ? "当前操作完成后即可识别人声。"
+            : "识别完整素材，保留中英文原文，不翻译。疑似遗漏和不确定区间列入待复核清单。";
+  const completed = state.jobs.find(j => j.kind === "transcribe" &&
+    j.source_id === state.source && j.status === "completed" && j.result);
+  $("recognitionResult").hidden = !completed;
+  $("recognitionResult").innerHTML = completed
+    ? `<div>上次识别 · ${completed.result.subtitle_count || 0} 条字幕</div>${recognitionLinks(completed)}`
+    : "";
 }
 async function projectOptions() {
   const data = await api("/api/projects");
@@ -1121,7 +1138,7 @@ function renderJobs() {
         .slice(0, 8)
         .map(
           (j) =>
-            `<div class="job ${j.status}"><div class="job-head"><span>${j.kind === "export" ? "↗ 视频导出" : "✧ 自动字幕"}</span><span>${labels[j.status]}</span></div>${j.source_id ? `<div class="job-message">${esc(state.project?.sources.find((s) => s.id === j.source_id)?.name || "")}</div>` : ""}<div class="job-message">${esc(j.message)}</div>${["queued", "running"].includes(j.status) ? `<progress max="100" value="${j.progress}"></progress>` : ""}${j.status === "completed" && j.kind === "export" ? `<div class="job-links"><a href="${j.result.video_url}" download>下载视频 ↓</a><a href="${j.result.subtitles_url}" download>字幕 SRT ↓</a></div>` : ""}${recognitionLinks(j)}${j.status === "failed" ? `<a class="quiet-link" href="/api/jobs/${j.id}/log" target="_blank" rel="noopener">查看任务日志 ↗</a>` : ""}</div>`,
+            `<div class="job ${j.status}"><div class="job-head"><span>${j.kind === "export" ? "↗ 视频导出" : "✧ 人声字幕"}</span><span>${labels[j.status]}</span></div>${j.source_id ? `<div class="job-message">${esc(state.project?.sources.find((s) => s.id === j.source_id)?.name || "")}</div>` : ""}<div class="job-message">${esc(j.message)}</div>${["queued", "running"].includes(j.status) ? `<progress max="100" value="${j.progress}"></progress>` : ""}${j.status === "completed" && j.kind === "export" ? `<div class="job-links"><a href="${j.result.video_url}" download>下载视频 ↓</a><a href="${j.result.subtitles_url}" download>字幕 SRT ↓</a></div>` : ""}${recognitionLinks(j)}${j.status === "failed" ? `<a class="quiet-link" href="/api/jobs/${j.id}/log" target="_blank" rel="noopener">查看任务日志 ↗</a>` : ""}</div>`,
         )
         .join("")
     : '<p class="muted">导出的视频会出现在这里。</p>';
@@ -1951,7 +1968,7 @@ function addCaption() {
 $("addCaptionBtn").onclick = $("timelineAddCaptionBtn").onclick = addCaption;
 $("transcribeBtn").onclick = async () => {
   try {
-    await saveProject();
+    if (!(await saveProject())) return;
     if (
       (state.project.subtitles[state.source] || []).length &&
       !confirm("重新生成会替换当前素材的字幕，是否继续？")
