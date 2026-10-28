@@ -703,6 +703,9 @@ kbd {
   min-width: 100%;
   height: calc(135px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
 }
+.timeline-canvas:has(.timeline-clip) {
+  cursor: crosshair;
+}
 .ruler {
   height: 26px;
   position: relative;
