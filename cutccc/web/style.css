@@ -876,7 +876,21 @@ kbd {
   width: 1px;
   background: #e6eeeb;
   pointer-events: none;
-  z-index: 3;
+  z-index: 10;
+}
+.playhead:before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  pointer-events: auto;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.playhead:hover {
+  background: var(--accent);
 }
 .playhead > span {
   position: absolute;
@@ -900,7 +914,7 @@ kbd {
   background: #e6eeeb;
   clip-path: polygon(0 0, 100% 0, 100% 50%, 50% 100%, 0 50%);
 }
-.playhead > span:hover:after,
+.playhead:hover > span:after,
 .playhead > span:focus-visible:after,
 .timeline-canvas.is-scrubbing .playhead > span:after {
   background: var(--accent);

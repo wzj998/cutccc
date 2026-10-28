@@ -1428,7 +1428,7 @@ function startTimelineScrub(event) {
   state.timelineScrub = {
     pointerId: event.pointerId,
     target,
-    grabOffset: target === $("playheadHandle") ? event.clientX - left : 0,
+    grabOffset: target === $("ruler") ? 0 : event.clientX - left,
     position: Number($("fullscreenSeek").value),
   };
   pause();
@@ -1874,7 +1874,7 @@ document.addEventListener("pointerup", finishClipTrim);
 document.addEventListener("pointercancel", event => finishClipTrim(event, true));
 window.addEventListener("blur", () => finishClipTrim(null, true));
 $("playBtn").onclick = togglePlay;
-for (const target of [$("playheadHandle"), $("ruler")]) {
+for (const target of [$("playhead"), $("playheadHandle"), $("ruler")]) {
   target.addEventListener("pointerdown", startTimelineScrub);
   target.addEventListener("lostpointercapture", finishTimelineScrub);
 }
@@ -1882,6 +1882,7 @@ document.addEventListener("pointermove", scrubTimeline);
 document.addEventListener("pointerup", finishTimelineScrub);
 document.addEventListener("pointercancel", finishTimelineScrub);
 $("playheadHandle").onclick = (event) => event.stopPropagation();
+$("playhead").onclick = (event) => event.stopPropagation();
 $("timelineCanvas").addEventListener("click", event => {
   if (state.suppressClipClick || event.defaultPrevented || event.target.closest("[data-clip], [data-audio-index], [data-caption-occurrence], #captionTrack, #ruler, #playheadHandle")) return;
   seekTimelineAt(event.clientX);
