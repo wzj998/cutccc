@@ -14,6 +14,7 @@ const state = {
   project: null,
   source: null,
   clip: -1,
+  previewContext: null,
   dirty: false,
   playing: false,
   jobs: [],
@@ -62,6 +63,12 @@ const total = () =>
   state.project ? state.project.clips.reduce((s, c) => s + duration(c), 0) : 0;
 const selected = () => state.project?.clips[state.clip];
 const source = () => state.project?.sources.find((s) => s.id === state.source);
+// Timeline selection can differ from the clip currently shown in the player.
+const previewClipIndex = () => state.previewContext
+  ? state.project?.clips.indexOf(state.previewContext.clip) ?? -1 : state.clip;
+const previewClip = () => state.project?.clips[previewClipIndex()];
+const previewSource = () => state.project?.sources.find(s => s.id ===
+  (state.previewContext ? state.previewContext.sourceId : state.source));
 const time = (value) => {
   const v = Math.max(0, Number(value) || 0);
   return `${String(Math.floor(v / 60)).padStart(2, "0")}:${(v % 60).toFixed(2).padStart(5, "0")}`;
@@ -176,10 +183,11 @@ function updateButtons() {
   $("projectTitle").disabled = !has;
   $("importBtn").disabled = state.busy;
   $("welcomeImport").disabled = state.busy;
-  $("fullscreenBtn").hidden = !src;
-  $("fullscreenBtn").disabled = !src || !document.fullscreenEnabled;
+  const preview = previewSource();
+  $("fullscreenBtn").hidden = !preview;
+  $("fullscreenBtn").disabled = !preview || !document.fullscreenEnabled;
   for (const id of ["previewZoom", "fullscreenZoom", "previewFitBtn", "fullscreenFitBtn"])
-    $(id).disabled = !src;
+    $(id).disabled = !preview;
   updatePreviewZoomButtons();
   $("fullscreenSeek").disabled = !state.project?.clips.length;
   $("fullscreenSeek").max = total();
@@ -192,6 +200,8 @@ function updateButtons() {
     "trimEnd",
   ])
     $(id).disabled = !clip || state.busy;
+  for (const id of ["splitBtn", "setInBtn", "setOutBtn"])
+    $(id).disabled ||= selected() !== previewClip();
   $("moveLeftBtn").disabled = !clip || state.clip === 0;
   $("moveRightBtn").disabled =
     !clip || state.clip === state.project.clips.length - 1;
@@ -253,6 +263,7 @@ async function loadProject(id, confirmChanges = true) {
     return;
   }
   pause();
+  state.previewContext = null;
   state.project = await api(`/api/projects/${id}`);
   state.clipboardKind = "clip";
   state.selectedVoice = -1;
@@ -349,10 +360,11 @@ function render() {
         )
         .join("")
     : '<div class="muted empty-library">素材只保存在你的电脑上。<br>导入视频，开始一次剪辑。</div>';
-  $("welcome").hidden = Boolean(source());
-  $("videoFrame").hidden = !source();
-  $("previewMeta").textContent = source()
-    ? `${source().width} × ${source().height} · ${time(source().duration)}`
+  const preview = previewSource();
+  $("welcome").hidden = Boolean(preview);
+  $("videoFrame").hidden = !preview;
+  $("previewMeta").textContent = preview
+    ? `${preview.width} × ${preview.height} · ${time(preview.duration)}`
     : "你的故事，从这里开始";
   renderTimeline();
   renderInspector();
@@ -378,12 +390,12 @@ function setPreviewZoom(percent) {
 }
 function updatePreviewZoomButtons() {
   for (const prefix of ["preview", "fullscreen"]) {
-    $(prefix + "ZoomOut").disabled = !source() || state.previewZoom <= .25;
-    $(prefix + "ZoomIn").disabled = !source() || state.previewZoom >= 4;
+    $(prefix + "ZoomOut").disabled = !previewSource() || state.previewZoom <= .25;
+    $(prefix + "ZoomIn").disabled = !previewSource() || state.previewZoom >= 4;
   }
 }
 function fitPreview() {
-  const s = source();
+  const s = previewSource();
   if (!s) return;
   const area = $("previewArea");
   const css = getComputedStyle(area);
@@ -835,8 +847,6 @@ function openTimelineCaption(occurrence) {
   state.captionSelectionAnchor = occurrence;
   state.subtitleSelectionProject = state.project.id;
   state.subtitleSelection = new Set([`${mapped.sourceId}:${mapped.index}`]);
-  // Seek the clicked occurrence, including reused clips and repeated voiceovers.
-  seekOutput(mapped.start + Math.min(.05, (mapped.end - mapped.start) / 2), false);
   renderTimeline();
   revealSubtitleInList(mapped.sourceId, mapped.index, true);
 }
@@ -1018,6 +1028,7 @@ function finishCaptionGesture(event, cancel = false) {
   } else {
     if (!gesture.moved) state.subtitleSelection = gesture.previousSelection;
     renderSubtitles();
+    if (!gesture.moved && event) seekTimelineAt(event.clientX);
   }
 }
 function previewSubtitle(sourceId, index) {
@@ -1184,6 +1195,9 @@ function pause() {
   $("video").pause();
 }
 function setPreview(at = 0, autoplay = false) {
+  const wasDetached = !!state.previewContext;
+  state.previewContext = null;
+  if (wasDetached) render();
   const token = ++state.previewToken;
   state.outputEndSelected = false;
   const s = source();
@@ -1213,6 +1227,21 @@ function setPreview(at = 0, autoplay = false) {
   } else if (video.readyState < 1) {
     video.addEventListener("loadedmetadata", seek, { once: true });
   } else seek();
+}
+function selectTimelineClip(index) {
+  const clip = state.project?.clips[index];
+  if (!clip) return;
+  state.previewContext ||= {clip: previewClip(), sourceId: state.source};
+  state.clip = index;
+  state.source = clip.source_id;
+  if (state.previewContext.clip === clip) state.previewContext = null;
+  state.clipboardKind = "clip";
+  state.subtitleSelection.clear();
+  render();
+}
+function seekTimelineAt(clientX) {
+  const left = $("timelineCanvas").getBoundingClientRect().left;
+  seekOutput((clientX - left) / state.zoom, false);
 }
 function selectClip(index, at, autoplay = false) {
   if (!state.project?.clips[index]) return;
@@ -1306,7 +1335,7 @@ function finishTimelineScrub(event) {
   seekOutput(drag.position, false);
 }
 function togglePlay() {
-  if (!selected()) {
+  if (!previewClip()) {
     if (state.project?.clips.length) selectClip(0);
     else return;
   }
@@ -1320,7 +1349,7 @@ function togglePlay() {
   }
   setPlaying(true);
   const token = state.previewToken;
-  const c = selected();
+  const c = previewClip();
   if (
     $("video").currentTime < c.start ||
     $("video").currentTime >= c.end - 0.02
@@ -1335,8 +1364,9 @@ function togglePlay() {
     });
 }
 function nextClip() {
-  if (state.clip + 1 < state.project.clips.length)
-    selectClip(state.clip + 1, undefined, true);
+  const index = previewClipIndex();
+  if (index + 1 < state.project.clips.length)
+    selectClip(index + 1, undefined, true);
   else {
     pause();
     state.outputEndSelected = true;
@@ -1351,11 +1381,11 @@ function followPlayhead(position, force = false) {
 }
 function stepTimelineFrame(direction) {
   if (!state.project?.clips.length || state.busy || state.captionGesture || state.timelineScrub || state.seekDragging || !timelineNavigation) return;
-  const clip = selected();
+  const clip = previewClip();
   // Paused media may be clamped before a fractional trim endpoint; the edit playhead remains authoritative.
   let position = state.outputEndSelected ? total() : Number($("fullscreenSeek").value);
   if (clip && state.playing && !$("video").paused && !state.switching && !$("video").seeking)
-    position = state.project.clips.slice(0,state.clip).reduce((n,c)=>n+duration(c),0) +
+    position = state.project.clips.slice(0,previewClipIndex()).reduce((n,c)=>n+duration(c),0) +
       Math.max(0, Math.min($("video").currentTime-clip.start,duration(clip)));
   if (state.pendingOutputSeek !== null) position = state.pendingOutputSeek;
   pause();
@@ -1366,7 +1396,7 @@ function stepTimelineFrame(direction) {
 }
 function tick() {
   const video = $("video");
-  let c = selected();
+  let c = previewClip();
   if (
     state.playing &&
     c &&
@@ -1375,14 +1405,14 @@ function tick() {
     video.currentTime >= c.end - 0.012
   )
     nextClip();
-  c = selected();
+  c = previewClip();
   const current = video.currentTime || 0;
   $("sourceClock").textContent = `素材 ${time(current)}`;
   let offset = 0;
   if (state.project && c) {
     offset =
       state.project.clips
-        .slice(0, state.clip)
+        .slice(0, previewClipIndex())
         .reduce((s, c) => s + duration(c), 0) +
       Math.max(0, Math.min(current - c.start, duration(c)));
   }
@@ -1406,7 +1436,7 @@ function tick() {
   $("playheadHandle").setAttribute("aria-valuetext", time(offset));
   const captionTime = state.outputEndSelected ? Math.max(0, total() - 1 / 30) : offset;
   const cues = c ? (state.previewCues ||= mappedCues()).filter(cue => cue.start <= captionTime && captionTime < cue.end)
-    : (state.project?.subtitles[state.source] || []).filter(cue => cue.timeline_offset === undefined && cue.start <= current && current < cue.end);
+    : (state.project?.subtitles[previewSource()?.id] || []).filter(cue => cue.timeline_offset === undefined && cue.start <= current && current < cue.end);
   renderCaptionPreview(cues);
   requestAnimationFrame(tick);
 }
@@ -1435,11 +1465,12 @@ function updateRange(start, end) {
 function splitClip() {
   const c = selected(),
     at = $("video").currentTime;
-  if (!c || at - c.start < 1 / 30 || c.end - at < 1 / 30) {
+  if (!c || c !== previewClip() || at - c.start < 1 / 30 || c.end - at < 1 / 30) {
     toast("请将播放头移到片段内部再分割。", true);
     return;
   }
   pause();
+  state.previewContext = null;
   state.project.clips.splice(
     state.clip,
     1,
@@ -1567,22 +1598,12 @@ $("clipTrack").onclick = (e) => {
   }
   const clip = e.target.closest("[data-clip]");
   if (!clip) return;
-  state.clipboardKind = "clip"; state.subtitleSelection.clear();
-  const index = Number(clip.dataset.clip),
-    c = state.project.clips[index];
-  const f = Math.max(
-    0,
-    Math.min(
-      1,
-      (e.clientX - clip.getBoundingClientRect().left) / clip.clientWidth,
-    ),
-  );
-  selectClip(index, c.start + f * (c.end - c.start));
+  selectTimelineClip(Number(clip.dataset.clip));
 };
 $("clipTrack").onkeydown = (e) => {
   if (e.key === "Enter") {
     const clip = e.target.closest("[data-clip]");
-    if (clip) { state.clipboardKind = "clip"; state.subtitleSelection.clear(); selectClip(Number(clip.dataset.clip)); }
+    if (clip) { e.preventDefault(); selectTimelineClip(Number(clip.dataset.clip)); }
   }
 };
 $("clipTrack").ondragstart = (e) => {
@@ -1607,7 +1628,7 @@ $("clipTrack").ondrop = (e) => {
   e.preventDefault();
   const from = Number(raw);
   if (!Number.isInteger(from) || !state.project.clips[from]) return;
-  state.clip = from;
+  selectTimelineClip(from);
   moveClip(Number(target.dataset.clip));
 };
 $("playBtn").onclick = togglePlay;
@@ -1619,6 +1640,10 @@ document.addEventListener("pointermove", scrubTimeline);
 document.addEventListener("pointerup", finishTimelineScrub);
 document.addEventListener("pointercancel", finishTimelineScrub);
 $("playheadHandle").onclick = (event) => event.stopPropagation();
+$("timelineCanvas").addEventListener("click", event => {
+  if (event.defaultPrevented || event.target.closest("[data-clip], [data-caption-occurrence], #captionTrack, #ruler, #playheadHandle")) return;
+  seekTimelineAt(event.clientX);
+});
 $("playheadHandle").ondragstart = (event) => event.preventDefault();
 $("playheadHandle").onkeydown = (event) => {
   if (["ArrowLeft","ArrowRight"].includes(event.key) && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
