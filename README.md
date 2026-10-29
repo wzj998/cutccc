@@ -19,16 +19,11 @@ Node 服务没有 npm 运行时依赖。剪辑和导出需要 Node.js 与 FFmpeg
 
 ## 启动工作台
 
-安装 Node.js **22 或以上**，并确保 `ffmpeg`、`ffprobe` 在 PATH 中。然后运行：
+两种方式都需要 Node.js **22 或以上**，并确保 `ffmpeg`、`ffprobe` 在 PATH 中。只做剪辑与导出时无需安装 Python；识别人声字幕还需配置下方的 Python 推理环境和模型。
 
-```powershell
-npm install -g cutccc
-cutccc serve
-```
+### 方式一：源码版本（推荐）
 
-也可直接运行 `npx cutccc@latest serve`。npm 包包含网页、Node 服务与 Python 推理源码，不包含模型、Python 依赖或视频素材；只做剪辑与导出时无需安装 Python。默认仅在本机运行。
-
-从源码运行：
+推荐使用源码版本，便于获取最新功能、更新和修改代码：
 
 ```powershell
 git clone https://github.com/wzj998/cutccc.git
@@ -36,11 +31,34 @@ cd cutccc
 npm start
 ```
 
-打开 **http://127.0.0.1:18765/**。Windows 也可双击 `studio.cmd`。
+Windows 也可在仓库目录双击 `studio.cmd`。更新源码时，在仓库目录执行 `git pull`，然后重新启动服务。
+
+指定端口、数据和推理目录：
 
 ```powershell
 node cutccc/node/cli.js serve --port 18765 --data-dir E:/video-work/studio --models-dir E:/models --inference-python E:/inference/.venv/Scripts/python.exe
 ```
+
+### 方式二：npm 安装版本
+
+适合直接安装已发布版本，无需克隆仓库：
+
+```powershell
+npm install -g cutccc
+cutccc serve
+```
+
+也可直接运行 `npx cutccc@latest serve`。全局安装后，执行 `npm install -g cutccc@latest` 更新，再重新启动服务。
+
+指定同样的启动选项：
+
+```powershell
+cutccc serve --port 18765 --data-dir E:/video-work/studio --models-dir E:/models --inference-python E:/inference/.venv/Scripts/python.exe
+```
+
+npm 包包含网页、Node 服务与 Python 推理源码，不包含模型、Python 依赖或视频素材。
+
+两种方式启动后都打开 **http://127.0.0.1:18765/**，服务默认仅在本机运行。
 
 默认数据目录为 `~/.local/share/cutccc`，模型目录为 `~/.cache/cutccc/models`。可通过 `CUTCCC_DATA_DIR`、`CUTCCC_MODELS_DIR` 和 `CUTCCC_INFERENCE_PYTHON` 配置。未指定推理环境时，Node 调用 PATH 中的 `python`。
 
@@ -191,7 +209,7 @@ cutccc serve --models-dir E:/models --inference-python E:/inference/.venv/Script
 
 `--inference-python` 在服务中应使用虚拟环境的绝对路径，例如将上面创建的 `.venv` 所在目录替换为实际的 `E:/inference`。
 
-在独立 Python 环境中安装：
+使用源码版本时，在仓库目录创建独立 Python 环境并安装：
 
 ```powershell
 python -m venv .venv
