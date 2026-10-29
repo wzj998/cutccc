@@ -2,6 +2,14 @@
   "name": "cutccc",
   "version": "0.3.0",
   "description": "Local video editing with a Node.js service and Python inference workers",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wzj998/cutccc.git"
+  },
+  "homepage": "https://github.com/wzj998/cutccc#readme",
+  "bugs": "https://github.com/wzj998/cutccc/issues",
+  "keywords": ["video-editor", "subtitles", "asr", "mcp", "offline"],
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
   "type": "module",
   "bin": {
     "cutccc": "cutccc/node/cli.js"
@@ -17,6 +25,8 @@
   "files": [
     "cutccc/node",
     "cutccc/web",
+    "cutccc/*.py",
+    "pyproject.toml",
     "README.md",
     "LICENSE"
   ],

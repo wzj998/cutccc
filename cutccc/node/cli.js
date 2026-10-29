@@ -2,6 +2,7 @@
 import { startServer } from "./server.js";
 import { runMcp } from "./mcp.js";
 import { launch } from "./processes.js";
+import { inferenceEnvironment } from "./inference-environment.js";
 
 const args = process.argv.slice(2),
   command = args.shift();
@@ -70,7 +71,7 @@ try {
     }
     const child = launch(python, ["-u", "-m", "cutccc", command, ...args], {
       stdio: "inherit",
-      env: { ...process.env, PYTHONUTF8: "1", PYTHONUNBUFFERED: "1" },
+      env: inferenceEnvironment(),
     });
     child.once("error", (e) => {
       console.error(e.message);

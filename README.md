@@ -22,6 +22,15 @@ Node 服务没有 npm 运行时依赖。剪辑和导出需要 Node.js 与 FFmpeg
 安装 Node.js **22 或以上**，并确保 `ffmpeg`、`ffprobe` 在 PATH 中。然后运行：
 
 ```powershell
+npm install -g cutccc
+cutccc serve
+```
+
+也可直接运行 `npx cutccc@latest serve`。npm 包包含网页、Node 服务与 Python 推理源码，不包含模型、Python 依赖或视频素材；只做剪辑与导出时无需安装 Python。默认仅在本机运行。
+
+从源码运行：
+
+```powershell
 git clone https://github.com/wzj998/cutccc.git
 cd cutccc
 npm start
@@ -169,6 +178,18 @@ node cutccc/node/cli.js mcp --api-url http://127.0.0.1:18765
 ## Python 推理环境
 
 推荐 Python **3.12**，包支持3.10以上。自动字幕使用 **Qwen3-ASR-1.7B** 和 **Qwen3-ForcedAligner-0.6B**，需要 NVIDIA CUDA 与 BF16 支持，例如 Ampere 或更新显卡。人声检测使用 `silero-vad`，其检测模型随该 Python 依赖安装，在本机 CPU 上运行。
+
+使用 npm 安装时，在独立 Python 环境中安装依赖，再指定该环境启动。Node 会定位随 npm 包分发的 Python 源码，运行目录不受限制：
+
+```powershell
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+.venv/Scripts/python.exe -m pip install qwen-asr==0.0.6 "numpy>=1.26,<3" "soundfile>=0.12" silero-vad==6.2.3
+cutccc download --models-dir E:/models --inference-python .venv/Scripts/python.exe
+cutccc serve --models-dir E:/models --inference-python E:/inference/.venv/Scripts/python.exe
+```
+
+`--inference-python` 在服务中应使用虚拟环境的绝对路径，例如将上面创建的 `.venv` 所在目录替换为实际的 `E:/inference`。
 
 在独立 Python 环境中安装：
 

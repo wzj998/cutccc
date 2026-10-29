@@ -27,6 +27,7 @@ import { exportOptions, exportProfile } from "../web/export-options.js";
 import { openFolder } from "./open-folder.js";
 import {projectDuration} from "../web/audio-tracks.js";
 import {getTracks,hasFreeVideo,videoDuration,materializeVideoPositions} from '../web/tracks.js';
+import {inferenceEnvironment} from './inference-environment.js';
 
 const uuid = () => randomUUID().replaceAll("-", "");
 const now = () => Date.now() / 1000;
@@ -526,7 +527,7 @@ export class Studio {
   }
   async runProcess(jid, command, args, folder, duration = 0) {
     if (this.closed) throw new Error("Task interrupted by shutdown");
-    const env = { ...process.env, PYTHONUTF8: "1", PYTHONUNBUFFERED: "1" };
+    const env = inferenceEnvironment();
     const child = launch(command, args, { cwd: folder, env });
     this.processes.add(child);
     const log = createWriteStream(path.join(folder, "process.log"));
