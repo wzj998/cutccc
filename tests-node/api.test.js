@@ -170,6 +170,7 @@ test("health, UI, schema and local-origin protections", async (t) => {
   assert.equal(h.body.runtime, "nodejs");
   assert.equal(h.body.models_ready, false);
   assert.match(await (await fetch(f.url)).text(), /本地剪辑工作台/);
+  assert.equal((await fetch(f.url + "/static/workspace-layout.js")).status, 200);
   assert.ok((await f.request("/openapi.json")).body.paths["/api/projects"]);
   assert.equal(
     (

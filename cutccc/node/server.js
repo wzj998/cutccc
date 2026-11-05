@@ -401,7 +401,7 @@ export function openapi() {
   }
   return {
     openapi: "3.1.0",
-    info: { title: "cutccc Node.js local API", version: "0.4.0" },
+    info: { title: "cutccc Node.js local API", version: "0.4.1" },
     paths,
     components: { schemas },
   };
@@ -452,6 +452,7 @@ export async function startServer(options = {}) {
             "tracks.js",
             "speech-options.js",
             "speech-ui.js",
+            "workspace-layout.js",
             "timeline-clipboard.js",
             "timeline-navigation.js",
             "style.css",
@@ -475,7 +476,7 @@ export async function startServer(options = {}) {
         }
         json(res, 200, {
           status: "ok",
-          version: "0.4.0",
+          version: "0.4.1",
           runtime: "nodejs",
           inference_runtime: "python",
           models_ready: ready,

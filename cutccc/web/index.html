@@ -50,11 +50,11 @@
           <h2>项目</h2>
           <button
             id="newProjectBtn"
-            class="icon-button"
+            class="button secondary small new-project-button"
             title="新建项目"
             aria-label="新建项目"
           >
-            ＋
+            <span aria-hidden="true">＋</span> 新建项目
           </button>
         </div>
         <label class="field-label" for="projectSelect">当前项目</label
@@ -277,7 +277,10 @@
             ><input id="showCaptions" type="checkbox" checked /> 显示字幕</label
           >
         </div>
-        <section class="timeline-panel">
+        <div id="timelineSplitter" class="timeline-splitter" role="separator" tabindex="0"
+          aria-label="调整预览与时间轴高度" aria-orientation="horizontal" aria-controls="timelinePanel"
+          title="上下拖动调整高度，双击恢复默认；方向键微调"></div>
+        <section id="timelinePanel" class="timeline-panel">
           <div class="timeline-toolbar">
             <div>
               <span class="section-label">剪辑时间线</span

@@ -8,6 +8,10 @@ let audioTracks;
 let timelineTracks;
 let speechUI;
 let speechTools;
+let workspaceLayout;
+const workspaceLayoutReady = import('/static/workspace-layout.js').then(({mountWorkspaceLayout}) => {
+  workspaceLayout = mountWorkspaceLayout({onResize: fitPreview});
+});
 const speechReady=Promise.all([import('/static/speech-ui.js'),import('/static/speech-options.js')]).then(([ui,tools])=>{
   speechTools=tools;
   speechUI=ui.mountSpeechUI({api,getProject:()=>state.project,getCaptions:getSpeechCaptions,getPosition:()=>Number($('fullscreenSeek').value)||0,
@@ -699,10 +703,7 @@ function renderTrackRows(p,audioHeight) {
   for(const [id,height] of [['clipTrack',videoHeight],['audioTrack',audioHeightTotal],['captionTrack',captionHeight]]){$(id).hidden=!height;$(id).style.height=`${height}px`;}
   const canvasHeight=26+videoHeight+audioHeightTotal+captionHeight+16;
   $("timelineCanvas").style.height=`${canvasHeight}px`;
-  const viewportHeight=Math.min(canvasHeight+12,Math.max(120,Math.min(420,innerHeight*.4)));
-  const panel=$("timelineScroll").closest('.timeline-panel');
-  const overhead=panel.querySelector('.timeline-toolbar').offsetHeight+panel.querySelector('.audio-view-toolbar').offsetHeight+panel.querySelector('.timeline-footer').offsetHeight+8;
-  if($("timelineScroll").style.height!==`${viewportHeight}px`||panel.style.height!==`${viewportHeight+overhead}px`){$("timelineScroll").style.height=`${viewportHeight}px`;panel.style.height=`${viewportHeight+overhead}px`;requestAnimationFrame(fitPreview);}
+  workspaceLayout?.update(canvasHeight);
 }
 
 function renderTimeline() {
@@ -2679,7 +2680,7 @@ async function health() {
 }
 (async () => {
   try {
-    await Promise.all([subtitleStyleReady, editHistoryReady, captionTimingReady, timelineClipboardReady, timelineNavigationReady,audioTracksReady,tracksReady,speechReady]);
+    await Promise.all([subtitleStyleReady, editHistoryReady, captionTimingReady, timelineClipboardReady, timelineNavigationReady,audioTracksReady,tracksReady,speechReady,workspaceLayoutReady]);
     setAudioView(localStorage.getItem("cutccc-audio-view") || "waveform");
     await health();
     await projectOptions();

@@ -270,6 +270,7 @@ kbd {
   font-size: 14px;
   font-weight: 600;
 }
+.new-project-button { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; padding: 7px 9px; }
 .field-label,
 .section-label {
   color: #a5b0b2;
@@ -387,6 +388,7 @@ kbd {
   min-height: 0;
 }
 .preview-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -491,6 +493,8 @@ kbd {
 .welcome {
   padding: 20px 0 28px;
   max-width: 430px;
+  max-height: 100%;
+  overflow-y: auto;
   width: 100%;
 }
 .welcome-symbol {
@@ -667,6 +671,7 @@ kbd {
   color: var(--accent);
 }
 .transport {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -697,12 +702,40 @@ kbd {
   vertical-align: middle;
 }
 .timeline-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   height: calc(272px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px));
   flex-shrink: 0;
   background: #171b1d;
   border-top: 1px solid var(--line);
 }
+.timeline-splitter {
+  position: relative;
+  flex: 0 0 10px;
+  cursor: ns-resize;
+  touch-action: none;
+  background: #111516;
+  border-top: 1px solid var(--line);
+  outline-offset: -2px;
+}
+.timeline-splitter::after {
+  content: "";
+  position: absolute;
+  width: 40px;
+  height: 2px;
+  left: calc(50% - 20px);
+  top: 3px;
+  border-radius: 2px;
+  background: #52615b;
+}
+.timeline-splitter:hover, .timeline-splitter:focus-visible, .timeline-splitter.is-resizing { background: #26392e; }
+.timeline-splitter:focus { outline: none; }
+.timeline-splitter:focus-visible { outline: 1px solid var(--accent); }
+.timeline-splitter:hover::after, .timeline-splitter:focus-visible::after, .timeline-splitter.is-resizing::after { background: var(--accent); }
+body.is-resizing-workspace, body.is-resizing-workspace * { cursor: ns-resize !important; user-select: none !important; }
 .timeline-toolbar {
+  flex-shrink: 0;
   height: 57px;
   display: flex;
   align-items: center;
@@ -726,7 +759,7 @@ kbd {
 .timeline-actions {
   gap: 8px !important;
 }
-.audio-view-toolbar { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 22px 5px; font-size: 10px; }
+.audio-view-toolbar { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 32px; padding: 0 22px 5px; font-size: 10px; }
 .audio-view-toolbar select { padding: 3px 6px; font-size: 10px; }
 .audio-view-toolbar .muted { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .zoom-control {
@@ -743,6 +776,8 @@ kbd {
   padding: 0;
 }
 .timeline-scroll {
+  flex: 1;
+  min-height: 0;
   height: calc(145px + var(--clip-audio-height, 28px) + var(--caption-extra-height, 0px) + var(--audio-track-height, 0px));
   overflow-x: auto;
   overflow-y: auto;
@@ -990,6 +1025,7 @@ kbd {
   user-select: none;
 }
 .timeline-footer {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   padding: 10px 23px;
