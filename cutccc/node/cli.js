@@ -20,7 +20,7 @@ try {
   if (Number(process.versions.node.split(".")[0]) < 22)
     throw new Error("Node.js 22 or newer is required");
   if (command === "--version") {
-    console.log("cutccc 0.3.0 (Node.js service / Python inference)");
+    console.log("cutccc 0.3.1 (Node.js service / Python inference)");
   } else if (
     !command ||
     ["--help", "-h"].includes(command) ||

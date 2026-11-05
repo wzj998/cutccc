@@ -4,7 +4,7 @@
 
 工程、素材、缓存与成片保存在配置的数据目录。语音模型下载后在本机离线运行。
 
-![cutccc 工作台：素材预览、字幕编辑与多轨时间轴](docs/images/workbench.jpg)
+![cutccc 工作台：素材预览、字幕编辑与多轨时间轴](https://raw.githubusercontent.com/wzj998/cutccc/main/docs/images/workbench.jpg)
 
 ## 架构
 
