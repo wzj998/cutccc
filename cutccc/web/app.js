@@ -6,6 +6,13 @@ let timelineClipboard;
 let timelineNavigation;
 let audioTracks;
 let timelineTracks;
+let speechUI;
+let speechTools;
+const speechReady=Promise.all([import('/static/speech-ui.js'),import('/static/speech-options.js')]).then(([ui,tools])=>{
+  speechTools=tools;
+  speechUI=ui.mountSpeechUI({api,getProject:()=>state.project,getCaptions:getSpeechCaptions,getPosition:()=>Number($('fullscreenSeek').value)||0,
+    insert:insertSpeechAudio,openTab:selectLibraryTab,beforePlay:pause,toast});
+});
 const tracksReady=import('/static/tracks.js').then(module=>{timelineTracks=module;});
 const audioTracksReady = import("/static/audio-tracks.js").then(module => {audioTracks=module;});
 const timelineNavigationReady = import("/static/timeline-navigation.js").then(module => { timelineNavigation = module; });
@@ -136,6 +143,35 @@ function refreshDirtyState() {
   $("saveState").style.color = state.dirty ? "#d9c992" : "";
   updateButtons();
 }
+function getSpeechCaptions() {
+  if(!state.project||!state.subtitleSelection.size)return [];
+  const mapped=mappedCues();
+  return selectedSubtitleEntries().map(entry=>{
+    const displayed=mapped.find(c=>c.sourceId===entry.sourceId&&c.index===entry.index&&c.occurrence===state.captionSelectionAnchor)||mapped.find(c=>c.sourceId===entry.sourceId&&c.index===entry.index);
+    return {text:entry.cue.text,start:displayed?.start??(Number($('fullscreenSeek').value)||0)};
+  }).sort((a,b)=>a.start-b.start);
+}
+async function insertSpeechAudio(job,placement) {
+  if(!state.project||state.project.id!==job.project_id||state.busy||state.saving)throw new Error('请先完成当前操作，再添加配音。');
+  const id=state.project.id;
+  if(!(await saveProject()))throw new Error('请先保存当前修改。');
+  busy('正在添加配音…');
+  try{
+    const response=await api(`/api/projects/${id}/speech/import`,'POST',{job_id:job.id,revision:state.project.revision});
+    if(state.project?.id!==id)return;
+    const edit=editSnapshot();
+    state.project={...response.project,...edit};
+    if(state.project.tracks==null)delete state.project.tracks;
+    state.project.subtitles[response.source.id]||=[];
+    const includeAsset=snapshot=>{const value=JSON.parse(snapshot);if(value)value.subtitles[response.source.id]||=[];return JSON.stringify(value);};
+    editHistory.current=includeAsset(editHistory.current);editHistory.saved=includeAsset(editHistory.saved);
+    editHistory.past=editHistory.past.map(includeAsset);editHistory.future=editHistory.future.map(includeAsset);editHistory.breakGroup();
+    const result=speechTools.placeSpeechAudio(state.project,response.source,response.cues,placement);
+    pause();state.project=result.project;state.previewContext=null;state.previewCues=null;state.subtitleSelection.clear();
+    markDirty();render();seekOutput(placement.position,false);selectAudioTrack(result.index);
+    speechUI.open();
+  }finally{busy();}
+}
 function markDirty(group = null) {
   state.previewCues = null;
   editHistory.record(editSnapshot(), {group});
@@ -227,7 +263,7 @@ function updateButtons() {
   $("moveLeftBtn").disabled = !!selectedAudio() || !clip || timelineTracks.hasFreeVideo(state.project) || state.clip === 0;
   $("moveRightBtn").disabled =
     !!selectedAudio() || !clip || timelineTracks.hasFreeVideo(state.project) || state.clip === state.project.clips.length - 1;
-  $("appendBtn").disabled = !src || state.busy;
+  $("appendBtn").disabled = !src || src.kind==='audio' || state.busy;
   $("addVoiceoverBtn").disabled = !src?.has_audio || !total() || state.busy;
   $("addCaptionBtn").disabled = !src || state.busy;
   $("timelineAddCaptionBtn").disabled = !src || state.busy;
@@ -242,6 +278,7 @@ function updateButtons() {
   $("transcribeBtn").textContent = running
     ? running.status === "queued" ? "✧ 字幕识别排队中…" : "✧ 正在识别人声…"
     : "✧ 识别人声并生成字幕";
+  speechUI?.update();
   $("recognitionLanguage").disabled = !src || state.busy || !!running;
   $("recognitionTarget").textContent = src?.name || "请先选择素材";
   $("recognitionTarget").title = src?.name || "";
@@ -380,16 +417,16 @@ function render() {
     ? p.sources
         .map(
           (s) =>
-            `<div class="source-card ${s.id === state.source ? "selected" : ""}" data-source="${s.id}" draggable="true" role="button" tabindex="0"><div class="source-image"><img src="${mediaUrl(s.id, "poster")}" alt=""><span class="duration-tag">${time(s.duration)}</span></div><button class="source-menu-button" type="button" data-source-menu="${s.id}" aria-label="${esc(s.name)}：更多操作" aria-haspopup="menu" aria-expanded="false" title="素材操作">⋯</button><div class="source-title"><span>▣</span><strong>${esc(s.name)}</strong></div><div class="source-caption">${s.width} × ${s.height}${s.has_audio ? " · 带音频" : " · 无音轨"}</div></div>`,
+            `<div class="source-card ${s.id === state.source ? "selected" : ""}" data-source="${s.id}" draggable="true" role="button" tabindex="0"><div class="source-image">${s.kind==='audio'?'<div class="audio-source-poster" aria-hidden="true">♫</div>':`<img src="${mediaUrl(s.id, "poster")}" alt="">`}<span class="duration-tag">${time(s.duration)}</span></div><button class="source-menu-button" type="button" data-source-menu="${s.id}" aria-label="${esc(s.name)}：更多操作" aria-haspopup="menu" aria-expanded="false" title="素材操作">⋯</button><div class="source-title"><span>${s.kind==='audio'?'♫':'▣'}</span><strong>${esc(s.name)}</strong></div><div class="source-caption">${s.kind==='audio'?'配音音频':`${s.width} × ${s.height}${s.has_audio ? " · 带音频" : " · 无音轨"}`}</div></div>`,
         )
         .join("")
     : '<div class="muted empty-library">素材只保存在你的电脑上。<br>导入视频，开始一次剪辑。</div>';
   const preview = previewSource();
   $("welcome").hidden = Boolean(preview);
   $("videoFrame").hidden = !preview;
-  $("videoFrame").classList.toggle("audio-only",!!state.audioClock);
+  $("videoFrame").classList.toggle("audio-only",!!state.audioClock||preview?.kind==='audio');
   $("previewMeta").textContent = preview
-    ? `${preview.width} × ${preview.height} · ${time(preview.duration)}`
+    ? `${preview.kind==='audio'?'配音音频':`${preview.width} × ${preview.height}`} · ${time(preview.duration)}`
     : "你的故事，从这里开始";
   renderTimeline();
   renderInspector();
@@ -432,7 +469,7 @@ function fitPreview() {
     area.clientHeight -
     parseFloat(css.paddingTop) -
     parseFloat(css.paddingBottom);
-  const ratio = s.width / s.height;
+  const ratio = s.kind==='audio'?16/9:s.width / s.height;
   const width = Math.min(availableWidth, availableHeight * ratio);
   const maxX = Math.abs(availableWidth - width * state.previewZoom) / 2;
   const maxY = Math.abs(availableHeight - (width / ratio) * state.previewZoom) / 2;
@@ -1161,6 +1198,7 @@ function previewSubtitle(sourceId, index) {
   else { state.source = sourceId; state.clip = -1; render(); setPreview(at); }
 }
 function renderCaptionStyleEditor() {
+  speechUI?.update();
   const entries = selectedSubtitleEntries();
   for (const block of $("captionTrack").querySelectorAll("[data-caption-key]")) {
     const selected = state.subtitleSelection.has(block.dataset.captionKey);
@@ -1259,6 +1297,7 @@ function renderJobs() {
     running: "处理中",
     completed: "已完成",
     failed: "未完成",
+    cancelled: "已取消",
   };
   $("jobCount").textContent = state.jobs.length;
   $("jobList").innerHTML = state.jobs.length
@@ -1266,7 +1305,7 @@ function renderJobs() {
         .slice(0, 8)
         .map(
           (j) =>
-            `<div class="job ${j.status}"><div class="job-head"><span>${j.kind === "export" ? "↗ 视频导出" : "✧ 人声字幕"}</span><span>${labels[j.status]}</span></div>${j.source_id ? `<div class="job-message">${esc(state.project?.sources.find((s) => s.id === j.source_id)?.name || "")}</div>` : ""}<div class="job-message">${esc(j.message)}</div>${["queued", "running"].includes(j.status) ? `<progress max="100" value="${j.progress}"></progress>` : ""}${j.status === "completed" && j.kind === "export" ? `<div class="job-links"><a href="${j.result.video_url}" download>下载视频 ↓</a><a href="${j.result.subtitles_url}" download>字幕 SRT ↓</a></div>` : ""}${recognitionLinks(j)}${j.status === "failed" ? `<a class="quiet-link" href="/api/jobs/${j.id}/log" target="_blank" rel="noopener">查看任务日志 ↗</a>` : ""}</div>`,
+            `<div class="job ${j.status}"><div class="job-head"><span>${j.kind === "export" ? "↗ 视频导出" : j.kind==='speech'?(j.speech.preview?'♫ 音色试听':'♫ 文字转语音'):"✧ 人声字幕"}</span><span>${labels[j.status]}</span></div>${j.source_id ? `<div class="job-message">${esc(state.project?.sources.find((s) => s.id === j.source_id)?.name || "")}</div>` : ""}<div class="job-message">${esc(j.message)}</div>${["queued", "running"].includes(j.status) ? `<progress max="100" value="${j.progress}"></progress>` : ""}${j.status === "completed" && j.kind === "export" ? `<div class="job-links"><a href="${j.result.video_url}" download>下载视频 ↓</a><a href="${j.result.subtitles_url}" download>字幕 SRT ↓</a></div>` : ""}${j.status==='completed'&&j.kind==='speech'?`<div class="job-links"><a href="${j.result.audio_url}" download="cutccc-speech.wav">下载配音 WAV ↓</a><button class="job-folder-button" data-open-speech="${j.id}">查看配音</button></div>`:''}${recognitionLinks(j)}${j.status === "failed" ? `<a class="quiet-link" href="/api/jobs/${j.id}/log" target="_blank" rel="noopener">查看任务日志 ↗</a>` : ""}</div>`,
         )
         .join("")
     : '<p class="muted">导出的视频会出现在这里。</p>';
@@ -1290,6 +1329,8 @@ function renderJobs() {
   }
 }
 $("jobList").addEventListener("click", async event => {
+  const speech=event.target.closest('[data-open-speech]');
+  if(speech){speechUI?.openJob(state.jobs.find(j=>j.id===speech.dataset.openSpeech));return;}
   const button = event.target.closest("[data-open-export-folder]");
   if (!button || button.disabled) return;
   button.disabled = true;
@@ -1795,6 +1836,7 @@ async function pollJobs() {
       state.jobs.some((old) => old.id === j.id && old.status !== "completed"),
   );
   state.jobs = data.jobs;
+  speechUI?.syncJobs(data.jobs);
   renderJobs();
   updateButtons();
   const latest = await api(`/api/projects/${id}`);
@@ -2142,7 +2184,7 @@ $("moveLeftBtn").onclick = () => moveClip(state.clip - 1);
 $("moveRightBtn").onclick = () => moveClip(state.clip + 1);
 $("appendBtn").onclick = () => {
   const s = source();
-  if (!s) return;
+  if (!s||s.kind==='audio') return;
   if(timelineTracks.hasFreeVideo(state.project)){
     try{const track=timelineTracks.getTracks(state.project).find(t=>t.id===state.selectedTrack&&t.type==='video')||timelineTracks.getTracks(state.project).find(t=>t.type==='video');
       const result=timelineTracks.insertSourceOnTrack(state.project,s.id,track.id,audioTracks.videoDuration(state.project));applyTrackEdit(result.project,result.kind,result.index);
@@ -2200,13 +2242,16 @@ function selectLibraryTab(name) {
   }
   $("materialsPanel").hidden = name !== "materials";
   $("subtitleListPanel").hidden = name !== "captions";
+  $("speechPanel").hidden = name !== "speech";
+  if(name==='speech')speechUI?.update();
 }
 for (const tab of document.querySelectorAll("[data-library-tab]")) {
   tab.onclick = () => selectLibraryTab(tab.dataset.libraryTab);
   tab.onkeydown = event => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const name = event.key === "Home" ? "materials" : event.key === "End" ? "captions" : tab.dataset.libraryTab === "materials" ? "captions" : "materials";
+    const names=['materials','captions','speech'],index=names.indexOf(tab.dataset.libraryTab);
+    const name = event.key === "Home" ? names[0] : event.key === "End" ? names.at(-1) : names[(index+(event.key==='ArrowRight'?1:2))%names.length];
     selectLibraryTab(name);
     document.querySelector(`[data-library-tab="${name}"]`).focus();
   };
@@ -2634,7 +2679,7 @@ async function health() {
 }
 (async () => {
   try {
-    await Promise.all([subtitleStyleReady, editHistoryReady, captionTimingReady, timelineClipboardReady, timelineNavigationReady,audioTracksReady,tracksReady]);
+    await Promise.all([subtitleStyleReady, editHistoryReady, captionTimingReady, timelineClipboardReady, timelineNavigationReady,audioTracksReady,tracksReady,speechReady]);
     setAudioView(localStorage.getItem("cutccc-audio-view") || "waveform");
     await health();
     await projectOptions();

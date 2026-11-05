@@ -16,6 +16,7 @@ export function exportOptions(input = {}) {
   return result;
 }
 export function exportProfile(source, input = {}, duration = 0) {
+  if(source?.kind==='audio')source={...source,width:1920,height:1080};
   const options = exportOptions(input);
   const sample = options.preset === "feishu";
   if (sample && (!Number.isFinite(duration) || duration <= 0)) throw new Error("样片需要有效的视频时长。");

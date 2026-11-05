@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cutccc"
-version = "0.3.1"
+version = "0.4.0"
 description = "Node.js video editing service with local Python subtitle inference workers"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,6 +16,7 @@ dependencies = []
 
 [project.optional-dependencies]
 inference = ["qwen-asr==0.0.6", "numpy>=1.26,<3", "soundfile>=0.12", "silero-vad==6.2.3"]
+speech = ["qwen-tts==0.1.1", "numpy>=1.26,<3", "soundfile>=0.12"]
 web = []
 mcp = []
 test = ["numpy>=1.26,<3", "mcp>=1.20,<2"]

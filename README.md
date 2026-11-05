@@ -15,7 +15,7 @@
 | 视频处理 | Node.js 启动 FFmpeg / ffprobe | 检查素材、缩略图、裁剪拼接、旁白混音、字幕烧录、导出 |
 | 模型推理 | 独立 Python 进程 | Qwen3-ASR 识别、Qwen3-ForcedAligner 时间对齐 |
 
-Node 服务没有 npm 运行时依赖。剪辑和导出需要 Node.js 与 FFmpeg；生成自动字幕还需 Python、CUDA 环境和本地模型。TTS 音频可由独立 Python 推理工具生成后作为旁白导入，当前服务不直接提供 TTS 模型接口。
+Node 服务没有 npm 运行时依赖。剪辑和导出需要 Node.js 与 FFmpeg；生成人声字幕或文字配音还需对应的 Python、CUDA 环境和本地模型。文字转语音已接入 Qwen3-TTS VoiceDesign，语音环境可在配音面板中配置。
 
 主服务代码位于 `cutccc/node/`。Python 保留 `pipeline.py`、`audio.py`、`subtitles.py`、`models.py`，以及命令兼容入口，不再提供 Python HTTP 服务或 Python 剪辑任务队列。
 
@@ -113,6 +113,32 @@ npm 包包含网页、Node 服务与 Python 推理源码，不包含模型、Pyt
 快捷键：空格播放 / 暂停，`F` 全屏，`I` 入点，`O` 出点，`S` 分割，`Ctrl/Cmd + S` 保存。
 
 当前最多64个视频片段、32段音频。音频轨沿用兼容的 `voiceovers` 工程字段；可选 `source_start/source_end` 保存原素材范围，`start` 为成片时间。分离的音频使用 `detached:true`，配对视频使用 `muted:true`，通过 `link_id/audio_link` 关联字幕，避免重复显示。旧旁白工程保持兼容，有声旁白仍在导出时将原声降为30%；分离原声不会触发该效果。工程和原素材不会因为分离而复制媒体大文件。当前没有转场或说话人分离。
+
+## 文字转语音与配音
+
+左侧常驻的 **文字转语音** 入口会打开“配音”页签。也可选中时间轴字幕，在右侧编辑区点击“将所选字幕转换为语音”。
+
+1. 输入配音文字（最多1000字），或点击“使用所选字幕”载入文字；载入不会修改原字幕。使用已有字幕时，默认关闭“同时添加配音字幕”，避免重复。
+2. 选择温柔女声、清晰男声、纪实旁白或活力讲解，点击“试听音色”。试听使用相同的本地模型，取文字开头生成最多5秒的音频；文字为空时使用示例句。声线是描述式风格预设，不是克隆某位真人。
+3. 选择自动 / 中文 / 英文，调节0.5–2倍语速；可补充情绪和风格描述。点击“生成配音”，面板显示真实的排队、加载和分段合成状态，支持取消及失败重试。试听和生成本身不改变工程，可继续剪辑。
+4. 生成后先用播放器试听，确认添加位置和音频轨道，再点击“添加到时间轴”。生成的 WAV 成为独立音频片段，不添加黑色视频素材，也不改变现有视频或字幕；可移动、裁剪、复制、删除和 `Ctrl+Z` 撤销。重复添加复用同一音频文件。
+5. 可选择“同时添加配音字幕”。时间来自每个合成分句的实际音频长度，并随语速调整，不用文字长度估算逐字对齐；原始字幕内容与样式不受影响。任务面板可重新打开生成结果或下载 WAV。
+
+### 配置本地语音环境
+
+首次在“本地语音设置”填写独立 Python 可执行文件和 **Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign** 模型目录，再点击“保存并检查”。需要支持 BF16 的 NVIDIA GPU、CUDA 版 PyTorch 和 `qwen-tts==0.1.1`。模型下载及依赖安装需先完成；软件不会静默下载模型或回退到不同的云端声音。
+
+建议为 TTS 新建独立环境，避免与 ASR 的依赖版本互相影响。按显卡驱动安装 CUDA 版 PyTorch 后，源码版本可在仓库执行：
+
+```powershell
+python -m venv .venv-speech
+.venv-speech/Scripts/python.exe -m pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+.venv-speech/Scripts/python.exe -m pip install -e ".[speech]"
+```
+
+npm 版本已携带 Python 工作进程源码，在独立环境安装 `qwen-tts==0.1.1`、`numpy` 和 `soundfile` 后填入该环境的 Python 路径即可。模型及说明见 [Qwen3-TTS 官方仓库](https://github.com/QwenLM/Qwen3-TTS)。
+
+语音设置保存在数据目录的 `speech-settings.json`，生成结果保存在任务目录；模型、音频和本机路径不进入代码仓库。也可通过 `CUTCCC_TTS_PYTHON` 和 `CUTCCC_TTS_MODELS_DIR` 指定，环境变量优先。合成与字幕识别共用本机任务队列，避免同时占用 GPU；项目关闭或服务重启后保留已有结果，未完成任务会标记中止。
 
 ## 工程兼容与任务恢复
 

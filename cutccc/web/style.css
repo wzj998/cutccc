@@ -588,6 +588,50 @@ kbd {
 .subtitle-add-toolbar { position: sticky; top: 0; z-index: 3; background: var(--panel); padding: 8px 0; margin: -8px 0 12px; }
 .subtitle-add-toolbar .button { width: 100%; }
 .voice-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.speech-entry { display:flex; flex-shrink:0; align-items:center; gap:10px; width:100%; margin:14px 0 4px; padding:11px; text-align:left; border:1px solid #516863; border-radius:9px; background:linear-gradient(115deg,#213631,#292d43); color:var(--text); cursor:pointer; }
+.speech-entry:hover { border-color:var(--accent); background:linear-gradient(115deg,#29483d,#343953); }
+.speech-entry:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.speech-entry > span:nth-child(2) { display:grid; gap:5px; flex:1; }
+.speech-entry strong { font-size:12px; color:#c2f2cf; }
+.speech-entry small { font-size:10px; color:#a6b9b4; }
+.speech-entry-icon { display:grid; place-items:center; width:29px; height:32px; border-radius:7px; color:#b9edcd; background:#86c8a51c; font-size:23px; }
+.speech-panel { padding-bottom:20px; overflow:auto; }
+.speech-panel > * { flex-shrink:0; }
+.speech-panel-heading { display:flex; justify-content:space-between; align-items:center; margin:5px 0 17px; }
+.speech-panel-heading h2 { margin:0 0 6px; font-size:14px; }
+.speech-panel-heading p { margin:0; font-size:10px; color:var(--muted); }
+.speech-local-badge { font-size:9px; border:1px solid #3b6650; border-radius:20px; padding:3px 7px; color:#a8dcbc; }
+.speech-field-heading { display:flex; gap:6px; align-items:center; justify-content:space-between; font-size:11px; margin:15px 0 8px; }
+.speech-text-action { border:0; padding:2px 0; background:none; color:#b5e9c4; font:inherit; font-size:10px; cursor:pointer; }
+.speech-text-action:disabled { color:var(--muted); opacity:.5; cursor:default; }
+.speech-panel textarea { display:block; width:100%; min-height:90px; resize:vertical; line-height:1.65; font-size:11px; }
+.speech-text-footer,.speech-range-labels { display:flex; justify-content:space-between; font-size:9px; color:var(--muted); margin:5px 0 12px; }
+.speech-text-footer.over-limit { color:#f0a090; }
+.speech-voices { display:grid; gap:6px; }
+.speech-voice { display:grid; grid-template-columns:13px 1fr; align-items:center; gap:8px; padding:9px; border:1px solid var(--line); border-radius:7px; cursor:pointer; }
+.speech-voice:has(input:checked) { border-color:#8bc99d; background:#91d6a512; }
+.speech-voice input { width:12px; margin:0; accent-color:#acf0bc; }
+.speech-voice > span { display:grid; gap:4px; }
+.speech-voice strong { font-size:11px; font-weight:600; }
+.speech-voice small { font-size:9px; color:var(--muted); }
+.speech-panel input[type=range] { width:100%; accent-color:#acf0bc; }
+.speech-range-labels button { font-size:9px; background:none; border:0; color:#afc3bb; cursor:pointer; }
+.speech-advanced,.speech-settings { margin:13px 0; font-size:10px; }
+.speech-advanced summary,.speech-settings summary { cursor:pointer; color:var(--muted); }
+.speech-advanced textarea { margin-top:8px; }
+.speech-settings { border-top:1px solid var(--line); padding-top:14px; margin-top:20px; }
+.speech-settings input,.speech-panel input[type=number] { width:100%; font-size:11px; }
+.speech-settings button { margin-top:12px; }
+.speech-task { border:1px solid var(--line); border-radius:7px; padding:10px; margin-top:10px; font-size:10px; }
+.speech-task progress { display:block; width:100%; height:5px; margin:10px 0; }
+.speech-result { border:1px solid #3d5d4d; background:#9bdfae07; border-radius:8px; margin-top:15px; padding:10px; }
+.speech-result .speech-field-heading:first-child { margin-top:0; }
+.speech-audio { width:100%; height:34px; margin:9px 0; }
+.speech-checkbox { display:flex; gap:7px; align-items:center; margin:12px 0; font-size:10px; }
+.speech-checkbox input { margin:0; accent-color:#acf0bc; }
+.speech-warning { font-size:10px; color:#e3c38d; }
+.speech-error { color:#efa392 !important; }
+.audio-source-poster { display:grid; place-items:center; width:100%; height:95px; color:#b7e8c8; background:linear-gradient(135deg,#243b33,#252b3a); font-size:42px; }
 .subtitle-selection-tools select { width: 100%; padding: 6px; }
 .caption-style-editor { border: 1px solid var(--line); border-radius: 6px; margin: 12px 0; padding: 9px; scroll-margin-top: 64px; }
 .caption-style-editor summary { cursor: pointer; font-size: 11px; }

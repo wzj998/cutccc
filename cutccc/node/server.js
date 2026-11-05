@@ -84,6 +84,7 @@ async function sendFile(req, res, file, { name } = {}) {
   if (!stat.isFile()) fail("File not found", 404);
   const mime = {
     ".html": "text/html; charset=utf-8",
+    ".wav": "audio/wav",
     ".js": "text/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".jpg": "image/jpeg",
@@ -230,6 +231,12 @@ async function upload(req, folder) {
 }
 const ROUTES = [
   ["get", "/api/health", "服务与模型状态"],
+  ['get','/api/speech/status','本地语音环境与音色预设'],
+  ['post','/api/speech/settings','检查并保存本地语音设置'],
+  ['post','/api/projects/{id}/speech','生成配音或音色试听，不改变工程'],
+  ['post','/api/projects/{id}/speech/import','将已生成的配音作为音频素材导入工程'],
+  ['get','/api/jobs/{id}/audio','试听或下载生成的WAV音频'],
+  ['post','/api/jobs/{id}/cancel','取消排队或正在运行的语音任务'],
   ["get", "/api/projects", "列出项目"],
   ["post", "/api/projects", "创建项目"],
   ["get", "/api/projects/{id}", "读取项目"],
@@ -264,6 +271,10 @@ export function openapi() {
     additionalProperties: false,
   });
   const schemas = {
+    SpeechSettings:schema({python:{type:'string',minLength:1,maxLength:1024},model_dir:{type:'string',minLength:1,maxLength:1024}},['python','model_dir']),
+    Speech:schema({text:{type:'string',minLength:1,maxLength:1000},voice:{type:'string',enum:['warm','clear','documentary','bright'],default:'warm'},language:{type:'string',enum:['Auto','Chinese','English'],default:'Auto'},speed:{type:'number',minimum:.5,maximum:2,default:1},instruction:{type:'string',maxLength:300},preview:{type:'boolean',default:false}},['text']),
+    ImportSpeech:schema({job_id:str,revision:{type:'integer',minimum:1}},['job_id','revision']),
+    CancelSpeech:schema({},[]),
     NewProject: schema(
       { title: { type: "string", minLength: 1, maxLength: 120 } },
       [],
@@ -357,7 +368,7 @@ export function openapi() {
     };
     if (method === "post" || method === "patch" || method === "delete") {
       const name =
-        url.endsWith("/open-folder") ? "OpenExportFolder" : method === "delete" ? "RemoveSource" : method === "patch"
+        url.endsWith('/speech/settings')?'SpeechSettings':url.endsWith('/speech/import')?'ImportSpeech':url.endsWith('/speech')?'Speech':url.endsWith('/cancel')?'CancelSpeech':url.endsWith("/open-folder") ? "OpenExportFolder" : method === "delete" ? "RemoveSource" : method === "patch"
           ? "Edit"
           : url === "/api/projects"
             ? "NewProject"
@@ -379,10 +390,10 @@ export function openapi() {
             }
           : { "application/json": { schema: ref(name) } },
       };
-      if (method === "post" && !url.endsWith("/open-folder")) {
+      if (method === "post" && !url.endsWith("/open-folder")&&!url.endsWith('/speech/settings')&&!url.endsWith('/cancel')) {
         delete operation.responses[200];
         operation.responses[
-          url.endsWith("/transcribe") || url.endsWith("/export") ? 202 : 201
+          url.endsWith("/transcribe") || url.endsWith("/export") ||url.endsWith('/speech') ? 202 : 201
         ] = { description: "Success" };
       }
     }
@@ -390,7 +401,7 @@ export function openapi() {
   }
   return {
     openapi: "3.1.0",
-    info: { title: "cutccc Node.js local API", version: "0.3.1" },
+    info: { title: "cutccc Node.js local API", version: "0.4.0" },
     paths,
     components: { schemas },
   };
@@ -439,6 +450,8 @@ export async function startServer(options = {}) {
             "caption-timing.js",
             "audio-tracks.js",
             "tracks.js",
+            "speech-options.js",
+            "speech-ui.js",
             "timeline-clipboard.js",
             "timeline-navigation.js",
             "style.css",
@@ -462,12 +475,17 @@ export async function startServer(options = {}) {
         }
         json(res, 200, {
           status: "ok",
-          version: "0.3.1",
+          version: "0.4.0",
           runtime: "nodejs",
           inference_runtime: "python",
           models_ready: ready,
         });
         return;
+      }
+      if(route==='/api/speech/status'&&method==='GET'){json(res,200,await studio.speechStatus());return;}
+      if(route==='/api/speech/settings'&&method==='POST'){
+        const b=object(await body(req),['python','model_dir'],['python','model_dir']);
+        json(res,200,await studio.saveSpeechConfiguration(b));return;
       }
       if (route === "/api/projects") {
         if (method === "GET") {
@@ -546,6 +564,15 @@ export async function startServer(options = {}) {
           json(res, 200, { jobs: await studio.listJobs(id) });
           return;
         }
+        if(rest==='speech'&&method==='POST'){
+          const b=object(await body(req),['text','voice','language','speed','instruction','preview'],['text']);
+          json(res,202,await studio.submitSpeech(id,b));return;
+        }
+        if(rest==='speech/import'&&method==='POST'){
+          const b=object(await body(req),['job_id','revision'],['job_id','revision']);
+          if(!Number.isInteger(b.revision)||b.revision<1)fail('revision must be a positive integer',422);
+          json(res,201,await studio.importSpeechResult(id,b.job_id,b.revision));return;
+        }
         if (rest === "transcribe" && method === "POST") {
           const b = object(
             await body(req),
@@ -567,6 +594,14 @@ export async function startServer(options = {}) {
         }
       }
       const folderMatch = /^\/api\/jobs\/([^/]+)\/open-folder$/.exec(route);
+      const speechAudio=/^\/api\/jobs\/([^/]+)\/audio$/.exec(route);
+      if(speechAudio&&(method==='GET'||method==='HEAD')){
+        await sendFile(req,res,await studio.speechAudioFile(speechAudio[1]),{name:'cutccc-speech.wav'});return;
+      }
+      const speechCancel=/^\/api\/jobs\/([^/]+)\/cancel$/.exec(route);
+      if(speechCancel&&method==='POST'){
+        object(await body(req),[]);json(res,200,await studio.cancelSpeech(speechCancel[1]));return;
+      }
       if (folderMatch && method === "POST") {
         object(await body(req), []);
         json(res, 200, await studio.openExportFolder(folderMatch[1]));

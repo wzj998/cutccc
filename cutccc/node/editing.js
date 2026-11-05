@@ -39,6 +39,7 @@ export function validateEdit(sources, clips, subtitles, tracks) {
   if (!Array.isArray(clips) || clips.length > 64)
     fail("A project supports at most 64 clips");
   for (const c of clips) {
+    if(sources.find(s=>s.id===c.source_id)?.kind==='audio')fail('Audio sources cannot be placed on a video track');
     if (!c || !durations.has(c.source_id)) fail("Unknown clip source");
     if (!finite(c.start) || !finite(c.end))
       fail("Clip times must be finite numbers");

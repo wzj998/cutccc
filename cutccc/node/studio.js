@@ -28,6 +28,7 @@ import { openFolder } from "./open-folder.js";
 import {projectDuration} from "../web/audio-tracks.js";
 import {getTracks,hasFreeVideo,videoDuration,materializeVideoPositions} from '../web/tracks.js';
 import {inferenceEnvironment} from './inference-environment.js';
+import * as speech from './speech.js';
 
 const uuid = () => randomUUID().replaceAll("-", "");
 const now = () => Date.now() / 1000;
@@ -64,6 +65,8 @@ export class Studio {
     studio.mutation = Promise.resolve();
     studio.queue = Promise.resolve();
     studio.processes = new Set();
+    studio.jobProcesses = new Map();
+    studio.cancelledSpeech = new Set();
     studio.waveformTasks = new Map();
     studio.waveformQueue = Promise.resolve();
     await fs.mkdir(studio.root, { recursive: true });
@@ -461,7 +464,9 @@ export class Studio {
   }
   async updateJob(id, changes) {
     return this.exclusive(async () => {
-      const j = { ...(await this.getJob(id)), ...changes };
+      const current = await this.getJob(id);
+      if(current.kind==='speech'&&current.status==='cancelled'&&changes.status!=='cancelled')return current;
+      const j = { ...current, ...changes };
       await this.write(this.jobDir(id, "job.json"), j);
       return j;
     });
@@ -527,8 +532,10 @@ export class Studio {
   }
   async runProcess(jid, command, args, folder, duration = 0) {
     if (this.closed) throw new Error("Task interrupted by shutdown");
+    if(this.cancelledSpeech.has(jid))throw new Error('语音任务已取消。');
     const env = inferenceEnvironment();
     const child = launch(command, args, { cwd: folder, env });
+    this.jobProcesses.set(jid,child);
     this.processes.add(child);
     const log = createWriteStream(path.join(folder, "process.log"));
     let updates = Promise.resolve(),
@@ -555,6 +562,8 @@ export class Studio {
       } else if (line.startsWith("{"))
         try {
           const e = JSON.parse(line);
+          if(e.stage==='speech_loading')queueUpdate({progress:5,message:'正在加载本地语音模型'});
+          if(e.stage==='speech_generating')queueUpdate({progress:10+Math.round(e.index/Math.max(1,e.chunks)*75),message:`正在合成第 ${e.index+1} / ${e.chunks} 段语音`});
           if (e.stage === "detecting_speech")
             queueUpdate({ progress: 3, message: "正在检测人声并检查遗漏" });
           if (e.stage === "loading_asr") {
@@ -594,6 +603,7 @@ export class Studio {
         await stopProcess(child);
       if (!log.destroyed) await new Promise((resolve) => log.end(resolve));
       this.processes.delete(child);
+      if(this.jobProcesses.get(jid)===child)this.jobProcesses.delete(jid);
     }
   }
   async work(jid, p, sourceId, burn) {
@@ -724,6 +734,13 @@ export class Studio {
     return file;
   }
   async openFolder(folder) { await openFolder(folder); }
+  checkSpeechRuntime(config) { return speech.checkSpeechRuntime(config); }
+  speechStatus() { return speech.speechStatus(this); }
+  saveSpeechConfiguration(input) { return speech.saveSpeechConfiguration(this,input); }
+  submitSpeech(id,input) { return speech.submitSpeech(this,id,input); }
+  speechAudioFile(jid) { return speech.speechAudioFile(this,jid); }
+  importSpeechResult(id,jid,revision) { return speech.importSpeechResult(this,id,jid,revision); }
+  cancelSpeech(jid) { return speech.cancelSpeech(this,jid); }
   async openExportFolder(id) {
     const video = await this.jobFile(id, "video.mp4");
     await this.openFolder(path.dirname(video));

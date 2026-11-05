@@ -68,6 +68,7 @@ export function insertSourceOnTrack(project,sourceId,id,start) {
   p.tracks=getTracks(p);start=Math.max(0,Math.round(start*30)/30);
   if(start+source.duration>86400)throw new Error('素材超出时间轴范围。');
   if(track.type==='video') {
+    if(source.kind==='audio')throw new Error('音频素材只能添加到音频轨道。');
     if(p.clips.length>=64)throw new Error('视频片段数量已达到上限。');
     materializeVideoPositions(p);p.clips.push({source_id:sourceId,start:0,end:source.duration,timeline_start:start,track_id:id});
     return {project:p,kind:'clip',index:p.clips.length-1};
