@@ -11,7 +11,7 @@ const now=()=>Date.now()/1000;
 const configPath=s=>path.join(s.root,'speech-settings.json');
 export async function speechConfiguration(studio) {
   let saved={};
-  try{saved=await studio.read(configPath(studio));}catch(error){if(error.code!=='ENOENT')throw error;}
+  try{saved=JSON.parse(await fs.readFile(configPath(studio),'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
   const python=process.env.CUTCCC_TTS_PYTHON||saved.python||studio.python;
   const model_dir=process.env.CUTCCC_TTS_MODELS_DIR||saved.model_dir||path.join(studio.models,'Qwen3-TTS-12Hz-1.7B-VoiceDesign');
   return {python,model_dir,checked:saved.checked===true&&saved.python===python&&saved.model_dir===model_dir};

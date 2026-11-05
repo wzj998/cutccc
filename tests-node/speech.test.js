@@ -14,7 +14,7 @@ import {insertSourceOnTrack} from '../cutccc/web/tracks.js';
 
 const hasFFmpeg=spawnSync('ffmpeg',['-version'],{windowsHide:true}).status===0;
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-async function fixture(t){
+async function fixture(t,{configure=true}={}){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'cutccc-speech-test-'));
   const app=await startServer({port:0,dataDir:path.join(root,'data'),modelsDir:path.join(root,'models')});
   t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
@@ -24,7 +24,7 @@ async function fixture(t){
   };
   const model=path.join(root,'voice-model');await fs.mkdir(model);await fs.writeFile(path.join(model,'config.json'),'{}');
   app.studio.checkSpeechRuntime=async config=>{assert.equal(config.model_dir,model);return {ready:true};};
-  const configured=await request('/api/speech/settings','POST',{python:'python',model_dir:model});assert.equal(configured.status,200);
+  if(configure){const configured=await request('/api/speech/settings','POST',{python:'python',model_dir:model});assert.equal(configured.status,200);}
   const project=await app.studio.createProject('Speech test');
   return {...app,root,model,request,project};
 }
@@ -32,6 +32,13 @@ async function completed(f,id){
   for(let i=0;i<200;i++){const job=await f.studio.getJob(id);if(['completed','failed','cancelled'].includes(job.status))return job;await wait(30);}
   throw new Error('Speech job did not finish');
 }
+
+test('fresh installations report an unconfigured speech environment without failing the status endpoint',async t=>{
+  const f=await fixture(t,{configure:false});
+  const status=await f.request('/api/speech/status');assert.equal(status.status,200);assert.equal(status.body.ready,false);assert.equal(status.body.voices.length,4);
+  const generation=await f.request(`/api/projects/${f.project.id}/speech`,'POST',{text:'Hello'});assert.equal(generation.status,422);
+  assert.equal((await f.studio.listJobs(f.project.id)).length,0);assert.equal((await f.studio.getProject(f.project.id)).revision,f.project.revision);
+});
 
 test('speech options validate limits and do not accept arbitrary provider or path fields',()=>{
   assert.equal(speechOptions({text:'  Hello!  '}).text,'Hello!');
