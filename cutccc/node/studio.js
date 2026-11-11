@@ -29,6 +29,7 @@ import {projectDuration} from "../web/audio-tracks.js";
 import {getTracks,hasFreeVideo,videoDuration,materializeVideoPositions} from '../web/tracks.js';
 import {inferenceEnvironment} from './inference-environment.js';
 import * as speech from './speech.js';
+import {pickLocalFiles} from './local-files.js';
 
 const uuid = () => randomUUID().replaceAll("-", "");
 const now = () => Date.now() / 1000;
@@ -308,10 +309,35 @@ export class Studio {
       return {deleted: true, project_id: id, archive_id: archiveId};
     });
   }
-  async importPath(id, input, name) {
-    return this.withProjectOperation(id, () => this.importProjectPath(id, input, name));
+  async pickLocalFiles() {
+    if (this.filePickerBusy) throw new APIError('本机文件选择窗口已打开。',409);
+    this.filePickerBusy = true;
+    try { return await pickLocalFiles(); }
+    finally { this.filePickerBusy = false; }
   }
-  async importProjectPath(id, input, name) {
+  async importPath(id, input, name, {mode = 'copy'} = {}) {
+    if (!['copy','reference'].includes(mode)) throw new APIError('mode must be reference or copy',422);
+    return this.withProjectOperation(id, () => this.importProjectPath(id, input, name, mode));
+  }
+  async importUpload(id, input, name) {
+    return this.withProjectOperation(id, async () => {
+      const uploads = path.join(this.root,'uploads');
+      const real = await fs.realpath(input);
+      const realRoot = await fs.realpath(this.root);
+      if (path.dirname(path.resolve(input)) !== path.resolve(uploads) || path.dirname(real) !== await fs.realpath(uploads) ||
+          path.dirname(await fs.realpath(uploads)) !== realRoot || (await fs.lstat(uploads)).isSymbolicLink() ||
+          (await fs.lstat(input)).isSymbolicLink() || !/^[a-f0-9-]+\.upload$/.test(path.basename(input)))
+        throw new APIError('Only owned upload files may be moved into a project',400);
+      const media = this.projectDir(id,'media');
+      const relative = path.relative(realRoot,await fs.realpath(media));
+      if ((await fs.lstat(media)).isSymbolicLink() || path.dirname(await fs.realpath(media)) !== await fs.realpath(this.projectDir(id)))
+        throw new APIError('Invalid project media directory',400);
+      if (relative === '..' || relative.startsWith('..'+path.sep) || path.isAbsolute(relative))
+        throw new APIError('Project media must stay inside its data directory',400);
+      return this.importProjectPath(id,input,name,'move');
+    });
+  }
+  async importProjectPath(id, input, name, mode) {
     await this.getProject(id);
     input = path.resolve(expand(input));
     if (!(await fs.stat(input).catch(() => null))?.isFile())
@@ -328,15 +354,18 @@ export class Studio {
     const target = this.projectDir(id, "media", sid + ext),
       thumb = this.projectDir(id, "media", sid + ".jpg");
     try {
-      await fs.copyFile(input, target, constants.COPYFILE_EXCL);
-      const metadata = await probe(target);
-      await thumbnail(target, thumb);
+      if (mode === 'copy') await fs.copyFile(input, target, constants.COPYFILE_EXCL);
+      if (mode === 'move') await fs.rename(input, target);
+      const videoPath = mode === 'reference' ? input : target;
+      const metadata = await probe(videoPath);
+      await thumbnail(videoPath, thumb);
       return await this.exclusive(async () => {
         const p = await this.getProject(id),
           source = {
             id: sid,
             name,
             file: path.basename(target),
+            ...(mode === 'reference' ? {storage:'reference',original_path:input} : {}),
             subtitle_version: 0,
             ...metadata,
           };
@@ -375,6 +404,14 @@ export class Studio {
       (await exists(path.join(folder, sid + ".preview.mp4")))
     )
       filename = sid + ".preview.mp4";
+    if (!poster && source.storage === 'reference' && filename !== sid + '.preview.mp4') {
+      const original = source.original_path;
+      if (typeof original !== 'string' || !path.isAbsolute(original))
+        throw new APIError('Invalid original video path',400);
+      if (!(await fs.stat(original).catch(()=>null))?.isFile())
+        throw new APIError(`原始素材已失效，文件可能被移动、改名或删除：${source.name}`,404);
+      return original;
+    }
     const file = path.resolve(folder, filename);
     if (path.dirname(file) !== path.resolve(folder) || !(await exists(file)))
       throw new APIError("Source file not found", 404);

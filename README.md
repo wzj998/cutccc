@@ -66,6 +66,8 @@ npm 包包含网页、Node 服务与 Python 推理源码，不包含模型、Pyt
 
 项目工程、原片与导出结果可能很大，建议把 `--data-dir` 放在代码仓库外。
 
+默认“导入本机视频”直接引用原片，不上传也不复制。Windows 会打开本机文件选择窗口；也可用“输入本机路径”粘贴完整路径，每行一个。工程只保存路径、剪辑信息及缩略图等缓存，移动、改名或删除原片后素材会失效，预览、识别和导出也将无法读取它。需要独立副本时，使用“浏览器导入（复制）”或拖入文件；这条流程完成上传后会直接将临时文件移动进工程，省掉第二次完整复制。
+
 在左侧选择项目后，可点击“删除当前项目”并确认。删除会将完整工程移至数据目录的 `.trash/projects/`，从项目列表移除；原始视频和已完成的导出保留。正在导入、处理音频、识别或导出的项目需要等待任务结束后再删除。删除项目不属于时间轴的 Ctrl+Z 撤销范围，本机回收目录可用于手动恢复已保存的工程。
 
 ## 网页操作
@@ -157,10 +159,11 @@ Node 服务对数据目录加单实例锁；任务串行执行。保存时版本
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | GET | `/api/health` | 主服务、推理运行时与模型状态 |
+| POST | `/api/local-files/pick` | 打开本机视频选择窗口，JSON 为 `{}`；返回路径列表，取消时列表为空；不上传媒体 |
 | GET / POST | `/api/projects` | 列出 / 创建项目 |
 | GET / PATCH | `/api/projects/{id}` | 读取 / 保存工程 |
 | DELETE | `/api/projects/{id}` | 删除工程，JSON 字段 `revision` 必填；工程移入本机回收目录，保留原片和已完成导出 |
-| POST | `/api/projects/{id}/sources/import` | 导入本机路径，字段 `path` |
+| POST | `/api/projects/{id}/sources/import` | 字段 `path`；`mode` 默认 `reference` 直接引用原片，可选 `copy` 保存独立副本 |
 | POST | `/api/projects/{id}/sources/upload` | 流式上传一个文件，multipart 字段 `file` |
 | DELETE | `/api/projects/{id}/sources/{source_id}` | 按 revision 移除未使用素材引用，保留磁盘文件供备份恢复 |
 | GET | `/api/projects/{id}/sources/{source_id}/media` | 媒体预览，支持 Range / HEAD |

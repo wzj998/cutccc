@@ -97,7 +97,7 @@ async function sendFile(req, res, file, { name } = {}) {
   };
   const headers = {
     ...SECURITY,
-    "Content-Type": mime[path.extname(file)] || "application/octet-stream",
+    "Content-Type": mime[path.extname(file).toLowerCase()] || "application/octet-stream",
     "Accept-Ranges": "bytes",
     "Last-Modified": stat.mtime.toUTCString(),
   };
@@ -231,6 +231,7 @@ async function upload(req, folder) {
 }
 const ROUTES = [
   ["get", "/api/health", "服务与模型状态"],
+  ['post','/api/local-files/pick','打开本机视频选择窗口，仅返回路径，不上传文件'],
   ['get','/api/speech/status','本地语音环境与音色预设'],
   ['post','/api/speech/settings','检查并保存本地语音设置'],
   ['post','/api/projects/{id}/speech','生成配音或音色试听，不改变工程'],
@@ -242,7 +243,7 @@ const ROUTES = [
   ["get", "/api/projects/{id}", "读取项目"],
   ["patch", "/api/projects/{id}", "保存剪辑、字幕和旁白"],
   ["delete", "/api/projects/{id}", "删除项目并移入本机回收目录，保留原始文件与已完成的导出"],
-  ["post", "/api/projects/{id}/sources/import", "导入本机视频"],
+  ["post", "/api/projects/{id}/sources/import", "按本机路径导入视频，默认直接引用原片"],
   ["post", "/api/projects/{id}/sources/upload", "上传单个视频"],
   ["delete", "/api/projects/{id}/sources/{source_id}", "移除未使用的素材引用，保留磁盘文件"],
   ["get", "/api/projects/{id}/sources/{source_id}/media", "兼容预览媒体"],
@@ -272,6 +273,7 @@ export function openapi() {
     additionalProperties: false,
   });
   const schemas = {
+    PickLocalFiles:schema({},[]),
     SpeechSettings:schema({python:{type:'string',minLength:1,maxLength:1024},model_dir:{type:'string',minLength:1,maxLength:1024}},['python','model_dir']),
     Speech:schema({text:{type:'string',minLength:1,maxLength:1000},voice:{type:'string',enum:['warm','clear','documentary','bright'],default:'warm'},language:{type:'string',enum:['Auto','Chinese','English'],default:'Auto'},speed:{type:'number',minimum:.5,maximum:2,default:1},instruction:{type:'string',maxLength:300},preview:{type:'boolean',default:false}},['text']),
     ImportSpeech:schema({job_id:str,revision:{type:'integer',minimum:1}},['job_id','revision']),
@@ -281,7 +283,7 @@ export function openapi() {
       [],
     ),
     DeleteProject: schema({revision: {type: "integer", minimum: 1}}, ["revision"]),
-    ImportPath: schema({ path: { type: "string", minLength: 1 } }, ["path"]),
+    ImportPath: schema({ path: { type: "string", minLength: 1 },mode:{type:'string',enum:['reference','copy'],default:'reference'} }, ["path"]),
     RemoveSource: schema({revision: {type: "integer", minimum: 1}, remove_used: {type:"boolean",default:false,description:"Also remove this source's video clips, audio clips and subtitles; original files remain on disk"}}, ["revision"]),
     Clip: schema({ source_id: str, start: number, end: number, muted:{type:"boolean"},audio_link:str,track_id:str,timeline_start:{type:'number',minimum:0,maximum:86400} }, [
       "source_id",
@@ -370,7 +372,7 @@ export function openapi() {
     };
     if (method === "post" || method === "patch" || method === "delete") {
       const name =
-        url.endsWith('/speech/settings')?'SpeechSettings':url.endsWith('/speech/import')?'ImportSpeech':url.endsWith('/speech')?'Speech':url.endsWith('/cancel')?'CancelSpeech':url.endsWith("/open-folder") ? "OpenExportFolder" : method === "delete" ? url === '/api/projects/{id}' ? 'DeleteProject' : "RemoveSource" : method === "patch"
+        url === '/api/local-files/pick'?'PickLocalFiles':url.endsWith('/speech/settings')?'SpeechSettings':url.endsWith('/speech/import')?'ImportSpeech':url.endsWith('/speech')?'Speech':url.endsWith('/cancel')?'CancelSpeech':url.endsWith("/open-folder") ? "OpenExportFolder" : method === "delete" ? url === '/api/projects/{id}' ? 'DeleteProject' : "RemoveSource" : method === "patch"
           ? "Edit"
           : url === "/api/projects"
             ? "NewProject"
@@ -392,7 +394,7 @@ export function openapi() {
             }
           : { "application/json": { schema: ref(name) } },
       };
-      if (method === "post" && !url.endsWith("/open-folder")&&!url.endsWith('/speech/settings')&&!url.endsWith('/cancel')) {
+      if (method === "post" && url !== '/api/local-files/pick' && !url.endsWith("/open-folder")&&!url.endsWith('/speech/settings')&&!url.endsWith('/cancel')) {
         delete operation.responses[200];
         operation.responses[
           url.endsWith("/transcribe") || url.endsWith("/export") ||url.endsWith('/speech') ? 202 : 201
@@ -403,7 +405,7 @@ export function openapi() {
   }
   return {
     openapi: "3.1.0",
-    info: { title: "cutccc Node.js local API", version: "0.4.2" },
+    info: { title: "cutccc Node.js local API", version: "0.4.3" },
     paths,
     components: { schemas },
   };
@@ -478,12 +480,17 @@ export async function startServer(options = {}) {
         }
         json(res, 200, {
           status: "ok",
-          version: "0.4.2",
+          version: "0.4.3",
           runtime: "nodejs",
           inference_runtime: "python",
           models_ready: ready,
+          native_file_picker: process.platform === 'win32',
         });
         return;
+      }
+      if (route === '/api/local-files/pick' && method === 'POST') {
+        object(await body(req),[]);
+        json(res,200,await studio.pickLocalFiles());return;
       }
       if(route==='/api/speech/status'&&method==='GET'){json(res,200,await studio.speechStatus());return;}
       if(route==='/api/speech/settings'&&method==='POST'){
@@ -522,17 +529,17 @@ export async function startServer(options = {}) {
           return;
         }
         if (rest === "sources/import" && method === "POST") {
-          const b = object(await body(req), ["path"], ["path"]);
+          const b = object(await body(req), ["path","mode"], ["path"]);
           if (typeof b.path !== "string" || !b.path)
             fail("path must be a nonempty string", 422);
-          json(res, 201, await studio.importPath(id, b.path));
+          json(res, 201, await studio.importPath(id, b.path, undefined, {mode:b.mode ?? 'reference'}));
           return;
         }
         if (rest === "sources/upload" && method === "POST") {
           await studio.getProject(id);
           const file = await upload(req, path.join(studio.root, "uploads"));
           try {
-            json(res, 201, await studio.importPath(id, file.temp, file.name));
+            json(res, 201, await studio.importUpload(id, file.temp, file.name));
           } finally {
             await fs.unlink(file.temp).catch(() => {});
           }

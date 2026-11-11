@@ -73,7 +73,7 @@
           <button id="speechTab" class="library-tab" data-library-tab="speech" role="tab" aria-selected="false" aria-controls="speechPanel" tabindex="-1">配音</button>
         </div>
         <div id="materialsPanel" class="library-panel" role="tabpanel" aria-labelledby="materialsTab">
-        <button id="importBtn" class="button import-button">＋ 导入视频</button
+        <button id="importBtn" class="button import-button" title="直接引用本机原片，不上传、不复制">＋ 导入本机视频</button
         ><input
           id="fileInput"
           type="file"
@@ -81,6 +81,8 @@
           multiple
           hidden
         />
+        <div class="import-alternatives"><button id="importPathBtn" type="button">输入本机路径</button><button id="uploadImportBtn" type="button" title="通过浏览器传入文件并保存在工程内">浏览器导入（复制）</button></div>
+        <p class="import-reference-hint">默认直接引用原片，不上传、不复制。移动、改名或删除原片后素材会失效。</p>
         <div class="section-label">
           素材 <span id="sourceCount">0</span>
         </div>
@@ -196,7 +198,7 @@
             <button id="welcomeImport" class="button primary large">
               导入第一段视频 <span>↗</span>
             </button>
-            <span class="welcome-hint">也可以将视频文件拖到此处</span>
+            <span class="welcome-hint">直接引用原片，无需上传或复制<br />拖入文件则通过浏览器导入并保留工程副本</span>
           </div>
           <div id="videoFrame" class="video-frame" title="拖动画面调整预览位置；双击全屏" hidden>
             <video id="video" playsinline preload="metadata"></video>
@@ -458,6 +460,15 @@
         </div>
       </aside>
     </main>
+    <dialog id="localImportDialog" aria-labelledby="localImportTitle">
+      <form id="localImportForm">
+        <div class="dialog-heading"><h2 id="localImportTitle">引用本机视频</h2><button id="closeLocalImport" class="icon-button" type="button" aria-label="关闭">×</button></div>
+        <p class="muted">粘贴视频的完整路径，每行一个。原片不会上传或复制；移动、改名或删除后素材将失效。</p>
+        <label class="field-label" for="localImportPaths">本机文件路径</label>
+        <textarea id="localImportPaths" rows="4" required placeholder="C:\Videos\video.mp4" spellcheck="false"></textarea>
+        <button id="confirmLocalImport" class="button primary full" type="submit">导入并引用原片</button>
+      </form>
+    </dialog>
     <dialog id="exportDialog">
       <form method="dialog">
         <div class="dialog-heading">

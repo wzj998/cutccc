@@ -34,6 +34,7 @@ const state = {
   playing: false,
   jobs: [],
   modelsReady: false,
+  nativeFilePicker: false,
   busy: false,
   saving: false,
   toastTimer: null,
@@ -240,8 +241,10 @@ function updateButtons() {
   $("deleteProjectBtn").disabled = !has || state.busy || state.saving || !!state.clipTrim || !!state.captionGesture || projectTaskActive;
   $("deleteProjectBtn").title = projectTaskActive ? "请等待当前项目任务完成后再删除" : "删除当前项目，原始文件保留";
   $("projectTitle").disabled = !has;
-  $("importBtn").disabled = state.busy;
-  $("welcomeImport").disabled = state.busy;
+  $("importBtn").disabled = state.busy || state.saving || !!state.clipTrim || !!state.captionGesture;
+  $("importPathBtn").disabled = state.busy || state.saving;
+  $("uploadImportBtn").disabled = state.busy || state.saving;
+  $("welcomeImport").disabled = $("importBtn").disabled;
   const preview = previewSource();
   $("fullscreenBtn").hidden = !preview;
   $("fullscreenBtn").disabled = !preview || !document.fullscreenEnabled;
@@ -424,7 +427,7 @@ async function deleteCurrentProject() {
   } finally { busy(); }
 }
 async function importFiles(files) {
-  if (!files.length) return;
+  if (!files.length || state.busy || state.saving || state.clipTrim || state.captionGesture) return;
   try {
     busy("正在导入视频…");
     if (state.dirty) await saveProject();
@@ -690,6 +693,51 @@ function mappedCues() {
 }
 function trackHeader(track) {
   return `<div class="track-row-header ${state.selectedTrack===track.id?'selected':''}" data-track-header><div><span>${esc(track.name)}</span><button type="button" class="track-delete-button" data-delete-track="${esc(track.id)}" title="删除轨道" aria-label="删除${esc(track.name)}">×</button></div></div>`;
+}
+
+async function finishLocalImport() {
+  state.clip = state.project.clips.length - 1;
+  state.source = selected()?.source_id || null;
+  localStorage.setItem("cutccc-project", state.project.id);
+  markSaved();
+  render();
+  setPreview(selected()?.start || 0);
+  await projectOptions();
+}
+async function importReferences(paths) {
+  if (!paths.length || state.busy || state.saving || state.clipTrim || state.captionGesture) return;
+  if (paths.length > 64) { toast("一次最多导入 64 个视频。",true); return; }
+  let changed = false;
+  busy("正在读取本机视频…");
+  try {
+    if (state.dirty && !await saveProject()) throw new Error("请先完成当前编辑再导入。");
+    if (!state.project) {
+      const name = paths[0].split(/[\\/]/).pop().replace(/\.[^.]+$/, "").slice(0,120) || "新项目";
+      state.project = await api("/api/projects","POST",{title:name});
+      changed = true;
+    }
+    for (const [index,path] of paths.entries()) {
+      busy(`读取信息并生成缩略图（${index+1}/${paths.length}）：${path.split(/[\\/]/).pop()}`);
+      state.project = await api(`/api/projects/${state.project.id}/sources/import`,"POST",{path,mode:"reference"});
+      changed = true;
+    }
+    await finishLocalImport();
+    toast("视频已导入，直接引用原片。");
+  } catch (error) {
+    // A later file may fail after earlier files were successfully registered.
+    if (changed) await finishLocalImport().catch(()=>{});
+    toast(error.message,true);
+  } finally { busy(); }
+}
+async function chooseLocalVideos() {
+  if (state.busy || state.saving || state.clipTrim || state.captionGesture) return;
+  if (!state.nativeFilePicker) { $("localImportDialog").showModal(); return; }
+  let selection;
+  busy("请在本机文件选择窗口中选择视频…");
+  try { selection = await api("/api/local-files/pick","POST",{}); }
+  catch (error) { toast(error.message,true); }
+  finally { busy(); }
+  if (selection?.paths.length) await importReferences(selection.paths);
 }
 function trackAtPointer(event,type) {
   const row=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-track-id]');
@@ -1918,8 +1966,17 @@ async function pollJobs() {
   }
 }
 
-$("importBtn").onclick = $("welcomeImport").onclick = () =>
-  $("fileInput").click();
+$("importBtn").onclick = $("welcomeImport").onclick = () => chooseLocalVideos();
+$("uploadImportBtn").onclick = () => $("fileInput").click();
+$("importPathBtn").onclick = () => { $("localImportDialog").showModal(); $("localImportPaths").focus(); };
+$("closeLocalImport").onclick = () => $("localImportDialog").close();
+$("localImportForm").onsubmit = event => {
+  event.preventDefault();
+  const paths = $("localImportPaths").value.split(/\r?\n/).map(value=>value.trim().replace(/^"(.*)"$/,'$1')).filter(Boolean);
+  if (!paths.length) return;
+  $("localImportDialog").close();
+  importReferences(paths);
+};
 $("fileInput").onchange = (e) => importFiles([...e.target.files]);
 $("newProjectBtn").onclick = () =>
   newProject().catch((e) => toast(e.message, true));
@@ -2204,9 +2261,18 @@ $("backBtn").onclick = () => {
 $("video").onended = () => {
   if (state.playing) nextClip();
 };
-$("video").onerror = () => {
+$("video").onerror = async () => {
   state.switching = false;
   pause();
+  const current = previewSource(),url = $("video").currentSrc;
+  if (!url) return;
+  if (current?.storage === 'reference') {
+    try {
+      const response = await fetch(mediaUrl(current.id),{method:'HEAD'});
+      if (previewSource()?.id !== current.id || $("video").currentSrc !== url) return;
+      if (response.status === 404) { toast(`原始素材已失效，请检查文件是否被移动、改名或删除：${current.name}`,true); return; }
+    } catch { /* Retain the codec message if source availability could not be checked. */ }
+  }
   toast("浏览器无法预览当前编码。可以继续设置剪辑范围并导出兼容的 MP4。", true);
 };
 $("zoom").oninput = () => renderTimeline();
@@ -2723,6 +2789,7 @@ async function health() {
   try {
     const data = await api("/api/health");
     state.modelsReady = data.models_ready;
+    state.nativeFilePicker = Boolean(data.native_file_picker);
     updateButtons();
   } catch (e) {
     toast("无法连接本地剪辑服务。", true);

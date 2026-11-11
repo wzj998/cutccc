@@ -15,8 +15,8 @@ const definitions = [
   ["create_project", "Create a local project.", { title: string }, []],
   [
     "import_video",
-    "Copy an explicitly selected local video into a project.",
-    { project_id: string, path: string },
+    "Import an explicitly selected local video by reference; moving or deleting the original invalidates it. Copy mode is optional.",
+    { project_id: string, path: string, mode:{type:'string',enum:['reference','copy'],default:'reference'} },
     ["project_id", "path"],
   ],
   [
@@ -102,6 +102,7 @@ export async function callTool(base, name, a = {}) {
     case "import_video":
       return apiCall(base, "POST", `/api/projects/${id}/sources/import`, {
         path: a.path,
+        mode: a.mode ?? 'reference',
       });
     case "get_project":
       return apiCall(base, "GET", `/api/projects/${id}`);
@@ -204,7 +205,7 @@ export async function runMcp(value = "http://127.0.0.1:18765") {
               ? p.protocolVersion
               : "2024-11-05",
             capabilities: { tools: {}, resources: {} },
-            serverInfo: { name: "cutccc", version: "0.4.2" },
+            serverInfo: { name: "cutccc", version: "0.4.3" },
           };
           break;
         case "ping":

@@ -142,6 +142,69 @@ test("project deletion refuses archive links outside its storage directory", asy
   assert.deepEqual(await f.studio.getProject(p.id),p);
   assert.deepEqual(await fs.readdir(outside),[]);
 });
+
+test('reference import streams and exports the original without storing a video copy; moving it makes the source unavailable', {skip:!hasFFmpeg}, async t=>{
+  const f=await fixture(t),p=await f.studio.createProject('Reference');
+  const original=path.join(f.root,'原片 with spaces.MP4');
+  await capture('ffmpeg',['-nostdin','-v','error','-f','lavfi','-i','testsrc2=s=160x90:r=30:d=0.5','-f','lavfi','-i','sine=frequency=500:duration=0.5','-c:v','libx264','-c:a','aac','-shortest',original]);
+  const bytes=await fs.readFile(original);
+  const imported=await f.request(`/api/projects/${p.id}/sources/import`,'POST',{path:original});
+  assert.equal(imported.status,201);const source=imported.body.sources[0];
+  assert.equal(source.storage,'reference');assert.equal(source.original_path,original);
+  assert.deepEqual(await fs.readdir(f.studio.projectDir(p.id,'media')),[source.id+'.jpg']);
+  assert.equal(await f.studio.sourcePath(p.id,source.id),original);
+  assert.equal(await f.studio.sourcePath(p.id,source.id,{preview:true}),original);
+  const range=await fetch(f.url+`/api/projects/${p.id}/sources/${source.id}/media`,{headers:{Range:'bytes=0-31'}});
+  assert.equal(range.status,206);assert.equal(range.headers.get('content-type'),'video/mp4');assert.deepEqual(Buffer.from(await range.arrayBuffer()),bytes.subarray(0,32));
+  assert.equal((await f.request(`/api/projects/${p.id}/sources/${source.id}/waveform`)).status,200);
+  const job=await f.studio.submit(p.id,'export',{resolution:'480p'});assert.equal((await waitJob(f,job.id)).status,'completed');
+  const moved=original+'.moved';await fs.rename(original,moved);
+  const missing=await f.request(`/api/projects/${p.id}/sources/${source.id}/media`);
+  assert.equal(missing.status,404);assert.match(missing.body.detail,/原始素材已失效/);
+  assert.equal((await f.request(`/api/projects/${p.id}/sources/${source.id}/waveform`)).status,404);
+  assert.equal((await f.request(`/api/projects/${p.id}`)).body.sources[0].storage,'reference');
+  await fs.rename(moved,original);
+  assert.equal((await fetch(f.url+`/api/projects/${p.id}/sources/${source.id}/media`,{method:'HEAD'})).status,200);
+  await f.studio.deleteProject(p.id,imported.body.revision);
+  assert.deepEqual(await fs.readFile(original),bytes);
+});
+
+test('copy mode remains independent, failed references never remove originals, and uploaded files are moved without a second copy',{skip:!hasFFmpeg},async t=>{
+  const f=await fixture(t),p=await f.studio.createProject('Modes'),original=path.join(f.root,'source.mp4');
+  await capture('ffmpeg',['-nostdin','-v','error','-f','lavfi','-i','color=red:s=160x90:r=30:d=0.2','-c:v','libx264',original]);
+  const bytes=await fs.readFile(original);
+  const copied=await f.request(`/api/projects/${p.id}/sources/import`,'POST',{path:original,mode:'copy'});
+  assert.equal(copied.status,201);assert.equal(copied.body.sources[0].storage,undefined);
+  await fs.rename(original,original+'.moved');
+  assert.deepEqual(await fs.readFile(await f.studio.sourcePath(p.id,copied.body.sources[0].id)),bytes);
+  const bad=path.join(f.root,'bad.mp4');await fs.writeFile(bad,'not a video');
+  assert.equal((await f.request(`/api/projects/${p.id}/sources/import`,'POST',{path:bad,mode:'reference'})).status,400);
+  assert.equal(await fs.readFile(bad,'utf8'),'not a video');
+  assert.equal((await f.request(`/api/projects/${p.id}/sources/import`,'POST',{path:bad,mode:'move'})).status,422);
+  await assert.rejects(f.studio.importUpload(p.id,bad,'bad.mp4'),error=>error.status===400);
+  const folder=path.join(f.studio.root,'uploads');await fs.mkdir(folder);
+  const temporary=path.join(folder,randomUUID()+'.upload');await fs.writeFile(temporary,bytes);
+  const before=await fs.stat(temporary);
+  const moved=await f.studio.importUpload(p.id,temporary,'uploaded.mp4');
+  const target=await f.studio.sourcePath(p.id,moved.sources.at(-1).id);
+  assert.equal((await fs.stat(target)).ino,before.ino);
+  assert.equal((await fs.stat(target)).birthtimeMs,before.birthtimeMs);
+  await assert.rejects(fs.stat(temporary),error=>error.code==='ENOENT');
+  assert.deepEqual(await fs.readFile(target),bytes);
+});
+
+test('local file selection endpoint returns only paths, cancellation creates no project, and request fields cannot inject a command',async t=>{
+  const f=await fixture(t);let calls=0;
+  f.studio.pickLocalFiles=async()=>{calls++;return {paths:[],cancelled:true};};
+  assert.deepEqual((await f.request('/api/local-files/pick','POST',{})).body,{paths:[],cancelled:true});
+  assert.deepEqual((await f.request('/api/projects')).body.projects,[]);
+  assert.equal((await f.request('/api/local-files/pick','POST',{command:'anything'})).status,422);
+  assert.equal((await f.request('/api/local-files/pick','POST',{}, {Origin:'https://unrelated.invalid'})).status,403);
+  assert.equal(calls,1);
+  const schema=(await f.request('/openapi.json')).body;
+  assert.equal(schema.components.schemas.ImportPath.properties.mode.default,'reference');
+  assert.equal(schema.paths['/api/local-files/pick'].post.requestBody.content['application/json'].schema.$ref,'#/components/schemas/PickLocalFiles');
+});
 test("separated audio ranges and muted video persist through HTTP with strict validation",async t=>{
   const f=await fixture(t),p=await fakeSource(f),sid=p.sources[0].id;
   const edit={revision:p.revision,clips:[{source_id:sid,start:0,end:2,muted:true,audio_link:'pair'}],
