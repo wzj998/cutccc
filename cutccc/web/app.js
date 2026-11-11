@@ -129,7 +129,7 @@ async function api(path, method = "GET", body) {
         ? data.detail
         : JSON.stringify(data.detail);
     throw new Error(
-      response.status === 409
+      response.status === 409 && /^Project changed in another client/.test(detail)
         ? "项目已在其他窗口更新，请重新载入后再编辑。"
         : detail || "请求未完成",
     );
@@ -235,6 +235,10 @@ function updateButtons() {
   $("newTrackType").disabled=$("addTrackBtn").disabled;
   $("reloadBtn").disabled = !has || state.busy || state.saving || !!state.clipTrim;
   $("projectSelect").disabled = state.busy || state.saving || !!state.clipTrim;
+  $("newProjectBtn").disabled = state.busy || state.saving || !!state.clipTrim || !!state.captionGesture;
+  const projectTaskActive = state.jobs.some(job => ["queued", "running"].includes(job.status));
+  $("deleteProjectBtn").disabled = !has || state.busy || state.saving || !!state.clipTrim || !!state.captionGesture || projectTaskActive;
+  $("deleteProjectBtn").title = projectTaskActive ? "请等待当前项目任务完成后再删除" : "删除当前项目，原始文件保留";
   $("projectTitle").disabled = !has;
   $("importBtn").disabled = state.busy;
   $("welcomeImport").disabled = state.busy;
@@ -314,6 +318,7 @@ async function projectOptions() {
       .map((p) => `<option value="${p.id}">${esc(p.title)}</option>`)
       .join("");
   if (state.project) $("projectSelect").value = state.project.id;
+  return data.projects;
 }
 async function loadProject(id, confirmChanges = true) {
   if (!id) return;
@@ -368,12 +373,55 @@ async function saveProject() {
   }
 }
 async function newProject() {
+  if (state.busy || state.saving || state.clipTrim || state.captionGesture) return;
   if (state.dirty && !confirm("当前修改尚未保存，是否新建项目？")) return;
   const p = await api("/api/projects", "POST", { title: "未命名项目" });
   state.dirty = false;
   await loadProject(p.id, false);
   $("projectTitle").focus();
   $("projectTitle").select();
+}
+async function deleteCurrentProject() {
+  const p = state.project;
+  if (!p || $("deleteProjectBtn").disabled) return;
+  const message = `删除“${p.title}”？\n工程将移入本机回收目录，原始视频和已完成的导出文件保留。${state.dirty ? '\n当前未保存的修改将被放弃。' : ''}`;
+  if (!confirm(message)) return;
+  pause();
+  busy("正在删除项目…");
+  try {
+    await api(`/api/projects/${p.id}`, "DELETE", {revision: p.revision});
+    state.project = null;
+    state.source = null;
+    state.clip = -1;
+    state.previewContext = null;
+    state.audioClock = null;
+    state.jobs = [];
+    state.waveforms.clear();
+    state.spectrograms.clear();
+    state.subtitleSelection.clear();
+    state.captionSelectionAnchor = null;
+    state.selectedTrack = null;
+    state.selectedVoice = -1;
+    state.clipboardKind = "clip";
+    state.pendingOutputSeek = null;
+    state.outputEndSelected = false;
+    state.switching = false;
+    state.previewToken++;
+    for (const player of state.audioPlayers.values()) player.element.pause();
+    state.audioPlayers.clear();
+    $("video").removeAttribute("src");
+    $("video").load();
+    $("fullscreenSeek").value = 0;
+    $("outputClock").textContent = time(0);
+    $("sourceClock").textContent = `素材 ${time(0)}`;
+    localStorage.removeItem("cutccc-project");
+    markSaved();
+    render();
+    const remaining = await projectOptions();
+    if (remaining.length) await loadProject(remaining[0].id, false);
+    else $("newProjectBtn").focus();
+    toast("项目已删除，原始文件保留。");
+  } finally { busy(); }
 }
 async function importFiles(files) {
   if (!files.length) return;
@@ -1875,6 +1923,8 @@ $("importBtn").onclick = $("welcomeImport").onclick = () =>
 $("fileInput").onchange = (e) => importFiles([...e.target.files]);
 $("newProjectBtn").onclick = () =>
   newProject().catch((e) => toast(e.message, true));
+$("deleteProjectBtn").onclick = () =>
+  deleteCurrentProject().catch((e) => toast(e.message, true));
 $("projectSelect").onchange = (e) =>
   loadProject(e.target.value).catch((e) => toast(e.message, true));
 $("reloadBtn").onclick = () =>

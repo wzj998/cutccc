@@ -204,7 +204,7 @@ export async function runMcp(value = "http://127.0.0.1:18765") {
               ? p.protocolVersion
               : "2024-11-05",
             capabilities: { tools: {}, resources: {} },
-            serverInfo: { name: "cutccc", version: "0.4.1" },
+            serverInfo: { name: "cutccc", version: "0.4.2" },
           };
           break;
         case "ping":

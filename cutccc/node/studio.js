@@ -68,6 +68,7 @@ export class Studio {
     studio.jobProcesses = new Map();
     studio.cancelledSpeech = new Set();
     studio.waveformTasks = new Map();
+    studio.projectOperations = new Map();
     studio.waveformQueue = Promise.resolve();
     await fs.mkdir(studio.root, { recursive: true });
     await studio.acquireLock();
@@ -220,7 +221,9 @@ export class Studio {
     }))
       if (d.isDirectory() && /^[a-f0-9]{32}$/.test(d.name)) {
         if (!(await exists(this.projectDir(d.name, "project.json")))) continue;
-        const p = await this.getProject(d.name);
+        let p;
+        try { p = await this.getProject(d.name); }
+        catch (error) { if (error.status === 404) continue; throw error; }
         projects.push({
           id: p.id,
           title: p.title,
@@ -257,7 +260,58 @@ export class Studio {
     await this.write(this.projectDir(p.id, "project.json"), p);
     return p;
   }
+  async withProjectOperation(id, task) {
+    await this.exclusive(async () => {
+      if (this.closed) throw new APIError("Server is shutting down", 503);
+      await this.getProject(id);
+      this.projectOperations.set(id, (this.projectOperations.get(id) || 0) + 1);
+    });
+    try { return await task(); }
+    finally {
+      const remaining = this.projectOperations.get(id) - 1;
+      if (remaining) this.projectOperations.set(id, remaining);
+      else this.projectOperations.delete(id);
+    }
+  }
+  async deleteProject(id, revision) {
+    identifier(id);
+    if (!Number.isInteger(revision) || revision < 1)
+      throw new APIError("revision must be a positive integer", 422);
+    return this.exclusive(async () => {
+      if (this.closed) throw new APIError("Server is shutting down", 503);
+      const project = await this.getProject(id);
+      if (project.revision !== revision)
+        throw new APIError("Project changed in another client. Reload before saving.", 409);
+      if (this.projectOperations.has(id) || (await this.listJobs(id)).some(job => ["queued", "running"].includes(job.status)))
+        throw new APIError("项目正在导入、处理音频、识别或导出，请等待任务完成后再删除。", 409);
+      const from = this.projectDir(id);
+      const projectsRoot = await fs.realpath(path.join(this.root, "projects"));
+      if ((await fs.lstat(path.join(this.root, "projects"))).isSymbolicLink() || path.dirname(projectsRoot) !== await fs.realpath(this.root) ||
+          (await fs.lstat(from)).isSymbolicLink() || path.dirname(await fs.realpath(from)) !== projectsRoot)
+        throw new APIError("Project directory must be inside the project storage directory", 400);
+      // Rename the complete project atomically; never delete original media or job outputs.
+      // Check each destination parent so a symlink cannot redirect the move outside storage.
+      let parent = this.root;
+      for (const name of [".trash", "projects"]) {
+        const folder = path.join(parent, name);
+        await fs.mkdir(folder).catch(error => { if (error.code !== "EEXIST") throw error; });
+        const stat = await fs.lstat(folder);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || path.dirname(await fs.realpath(folder)) !== await fs.realpath(parent))
+          throw new APIError("Project archive must be inside the data directory", 400);
+        parent = folder;
+      }
+      const archiveId = `${id}-${uuid()}`;
+      const to = path.join(parent, archiveId);
+      if (path.dirname(path.resolve(from)) !== path.resolve(this.root, "projects") || path.dirname(path.resolve(to)) !== path.resolve(this.root, ".trash", "projects"))
+        throw new APIError("Invalid project archive path", 400);
+      await fs.rename(from, to);
+      return {deleted: true, project_id: id, archive_id: archiveId};
+    });
+  }
   async importPath(id, input, name) {
+    return this.withProjectOperation(id, () => this.importProjectPath(id, input, name));
+  }
+  async importProjectPath(id, input, name) {
     await this.getProject(id);
     input = path.resolve(expand(input));
     if (!(await fs.stat(input).catch(() => null))?.isFile())
@@ -385,6 +439,9 @@ export class Studio {
     });
   }
   async waveform(id, sid) {
+    return this.withProjectOperation(id, () => this.projectWaveform(id, sid));
+  }
+  async projectWaveform(id, sid) {
     if (this.closed) throw new APIError("Server is shutting down", 503);
     const file = await this.sourcePath(id, sid);
     const project = await this.getProject(id), source = project.sources.find(s => s.id === sid);
@@ -415,6 +472,9 @@ export class Studio {
     try { return await task; } finally { this.waveformTasks.delete(key); }
   }
   async spectrogram(id, sid, tile = "overview") {
+    return this.withProjectOperation(id, () => this.projectSpectrogram(id, sid, tile));
+  }
+  async projectSpectrogram(id, sid, tile) {
     if (this.closed) throw new APIError("Server is shutting down", 503);
     const file = await this.sourcePath(id, sid);
     const source = (await this.getProject(id)).sources.find(s => s.id === sid);

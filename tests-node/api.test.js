@@ -71,6 +71,77 @@ async function waitJob(f, id) {
   }
   throw new Error("Job did not finish");
 }
+
+test("project deletion archives media, keeps other projects and completed exports, and cannot be replayed", async t => {
+  const f = await fixture(t), p = await fakeSource(f);
+  const other = await f.studio.createProject("Keep me");
+  const original = path.join(f.root, "original.mp4");
+  await fs.writeFile(original, "original-media");
+  const jid = randomUUID().replaceAll("-", "");
+  await fs.mkdir(f.studio.jobDir(jid));
+  await f.studio.write(f.studio.jobDir(jid, "job.json"), {id:jid, project_id:p.id, kind:"export", status:"completed"});
+  await fs.writeFile(f.studio.jobDir(jid, "video.mp4"), "finished-export");
+  const result = await f.request(`/api/projects/${p.id}`, "DELETE", {revision:p.revision});
+  assert.equal(result.status, 200);
+  assert.equal(result.body.deleted, true);
+  assert.equal(result.body.project_id, p.id);
+  assert.match(result.body.archive_id, new RegExp(`^${p.id}-[a-f0-9]{32}$`));
+  const archive = path.join(f.studio.root, ".trash", "projects", result.body.archive_id);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(archive, "project.json"), "utf8")), p);
+  assert.equal(await fs.readFile(path.join(archive, "media", p.sources[0].file), "utf8"), "test-video");
+  assert.equal(await fs.readFile(original, "utf8"), "original-media");
+  assert.equal((await f.request(`/api/projects/${p.id}`)).status, 404);
+  assert.deepEqual((await f.request('/api/projects')).body.projects.map(p=>p.id), [other.id]);
+  assert.equal(await (await fetch(f.url+`/api/jobs/${jid}/video`)).text(), "finished-export");
+  assert.equal((await f.request(`/api/projects/${p.id}`, "DELETE", {revision:p.revision})).status, 404);
+  assert.equal((await f.request(`/api/projects/${p.id}`, "PATCH", {revision:p.revision,clips:p.clips,subtitles:p.subtitles})).status, 404);
+  const spec = (await f.request('/openapi.json')).body;
+  assert.equal(spec.paths['/api/projects/{id}'].delete.requestBody.content['application/json'].schema.$ref, '#/components/schemas/DeleteProject');
+});
+
+test("project deletion validates the revision, blocks all active jobs, and leaves rejected projects unchanged", async t => {
+  const f = await fixture(t), p = await fakeSource(f), route = `/api/projects/${p.id}`;
+  for (const input of [{}, {revision:0}, {revision:'2'}, {revision:p.revision,path:'elsewhere'}])
+    assert.equal((await f.request(route, 'DELETE', input)).status, 422);
+  assert.equal((await f.request(route, 'DELETE', {revision:p.revision-1})).status, 409);
+  for (const kind of ['transcribe','export','speech']) {
+    const jid=randomUUID().replaceAll('-','');await fs.mkdir(f.studio.jobDir(jid));
+    const job={id:jid,project_id:p.id,kind,status:'queued'};
+    await f.studio.write(f.studio.jobDir(jid,'job.json'),job);
+    assert.equal((await f.request(route,'DELETE',{revision:p.revision})).status,409);
+    await f.studio.write(f.studio.jobDir(jid,'job.json'),{...job,status:'running'});
+    assert.equal((await f.request(route,'DELETE',{revision:p.revision})).status,409);
+    await f.studio.write(f.studio.jobDir(jid,'job.json'),{...job,status:'failed'});
+  }
+  assert.deepEqual((await f.request(route)).body,p);
+  assert.equal((await f.request('/api/projects/not-an-id','DELETE',{revision:1})).status,400);
+  assert.equal((await f.request(route,'DELETE',{revision:p.revision})).status,200);
+});
+
+test("project deletion and imports serialize their reservation before any files move", async t => {
+  const f=await fixture(t),p=await fakeSource(f);
+  let release,entered;
+  const started=new Promise(resolve=>{entered=resolve;});
+  const gate=new Promise(resolve=>{release=resolve;});
+  const operation=f.studio.withProjectOperation(p.id,async()=>{entered();await gate;});
+  await started;
+  try {assert.equal((await f.request(`/api/projects/${p.id}`,'DELETE',{revision:p.revision})).status,409);}
+  finally {release();await operation;}
+  const deletes=await Promise.all([1,2].map(()=>f.request(`/api/projects/${p.id}`,'DELETE',{revision:p.revision})));
+  assert.deepEqual(deletes.map(r=>r.status).sort(),[200,404]);
+  assert.equal(f.studio.projectOperations.size,0);
+  await assert.rejects(f.studio.importPath(p.id,path.join(f.root,'missing.mp4')),error=>error.status===404);
+  assert.equal(f.studio.projectOperations.size,0);
+});
+
+test("project deletion refuses archive links outside its storage directory", async t => {
+  const f=await fixture(t),p=await fakeSource(f),outside=path.join(f.root,'outside');
+  await fs.mkdir(outside);
+  await fs.symlink(outside,path.join(f.studio.root,'.trash'),process.platform==='win32'?'junction':'dir');
+  assert.equal((await f.request(`/api/projects/${p.id}`,'DELETE',{revision:p.revision})).status,400);
+  assert.deepEqual(await f.studio.getProject(p.id),p);
+  assert.deepEqual(await fs.readdir(outside),[]);
+});
 test("separated audio ranges and muted video persist through HTTP with strict validation",async t=>{
   const f=await fixture(t),p=await fakeSource(f),sid=p.sources[0].id;
   const edit={revision:p.revision,clips:[{source_id:sid,start:0,end:2,muted:true,audio_link:'pair'}],

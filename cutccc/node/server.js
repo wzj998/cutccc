@@ -241,6 +241,7 @@ const ROUTES = [
   ["post", "/api/projects", "创建项目"],
   ["get", "/api/projects/{id}", "读取项目"],
   ["patch", "/api/projects/{id}", "保存剪辑、字幕和旁白"],
+  ["delete", "/api/projects/{id}", "删除项目并移入本机回收目录，保留原始文件与已完成的导出"],
   ["post", "/api/projects/{id}/sources/import", "导入本机视频"],
   ["post", "/api/projects/{id}/sources/upload", "上传单个视频"],
   ["delete", "/api/projects/{id}/sources/{source_id}", "移除未使用的素材引用，保留磁盘文件"],
@@ -279,6 +280,7 @@ export function openapi() {
       { title: { type: "string", minLength: 1, maxLength: 120 } },
       [],
     ),
+    DeleteProject: schema({revision: {type: "integer", minimum: 1}}, ["revision"]),
     ImportPath: schema({ path: { type: "string", minLength: 1 } }, ["path"]),
     RemoveSource: schema({revision: {type: "integer", minimum: 1}, remove_used: {type:"boolean",default:false,description:"Also remove this source's video clips, audio clips and subtitles; original files remain on disk"}}, ["revision"]),
     Clip: schema({ source_id: str, start: number, end: number, muted:{type:"boolean"},audio_link:str,track_id:str,timeline_start:{type:'number',minimum:0,maximum:86400} }, [
@@ -368,7 +370,7 @@ export function openapi() {
     };
     if (method === "post" || method === "patch" || method === "delete") {
       const name =
-        url.endsWith('/speech/settings')?'SpeechSettings':url.endsWith('/speech/import')?'ImportSpeech':url.endsWith('/speech')?'Speech':url.endsWith('/cancel')?'CancelSpeech':url.endsWith("/open-folder") ? "OpenExportFolder" : method === "delete" ? "RemoveSource" : method === "patch"
+        url.endsWith('/speech/settings')?'SpeechSettings':url.endsWith('/speech/import')?'ImportSpeech':url.endsWith('/speech')?'Speech':url.endsWith('/cancel')?'CancelSpeech':url.endsWith("/open-folder") ? "OpenExportFolder" : method === "delete" ? url === '/api/projects/{id}' ? 'DeleteProject' : "RemoveSource" : method === "patch"
           ? "Edit"
           : url === "/api/projects"
             ? "NewProject"
@@ -401,7 +403,7 @@ export function openapi() {
   }
   return {
     openapi: "3.1.0",
-    info: { title: "cutccc Node.js local API", version: "0.4.1" },
+    info: { title: "cutccc Node.js local API", version: "0.4.2" },
     paths,
     components: { schemas },
   };
@@ -476,7 +478,7 @@ export async function startServer(options = {}) {
         }
         json(res, 200, {
           status: "ok",
-          version: "0.4.1",
+          version: "0.4.2",
           runtime: "nodejs",
           inference_runtime: "python",
           models_ready: ready,
@@ -512,6 +514,11 @@ export async function startServer(options = {}) {
             200,
             await studio.updateEdit(id, editBody(await body(req))),
           );
+          return;
+        }
+        if (!rest && method === "DELETE") {
+          const b = object(await body(req), ["revision"], ["revision"]);
+          json(res, 200, await studio.deleteProject(id, b.revision));
           return;
         }
         if (rest === "sources/import" && method === "POST") {
